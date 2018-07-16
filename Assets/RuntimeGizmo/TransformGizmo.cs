@@ -10,8 +10,10 @@ namespace RuntimeGizmos
 	{
 		public TransformSpace space = TransformSpace.Global;
 		public TransformType type = TransformType.Move;
+		public TransformPivot pivot = TransformPivot.Pivot;
 
 		//These are the same as the unity editor hotkeys
+		public KeyCode SetPivotModeToggle = KeyCode.Z;
 		public KeyCode SetMoveType = KeyCode.W;
 		public KeyCode SetRotateType = KeyCode.E;
 		public KeyCode SetScaleType = KeyCode.R;
@@ -48,6 +50,7 @@ namespace RuntimeGizmos
 		Camera myCamera;
 
 		static Material lineMaterial;
+		static Transform pivotTransform;
 
 		void Awake()
 		{
@@ -121,6 +124,13 @@ namespace RuntimeGizmos
 			if(Input.GetKeyDown(SetMoveType)) type = TransformType.Move;
 			else if(Input.GetKeyDown(SetRotateType)) type = TransformType.Rotate;
 			else if(Input.GetKeyDown(SetScaleType)) type = TransformType.Scale;
+
+			if(Input.GetKeyDown(SetPivotModeToggle))
+			{
+				if(pivot == TransformPivot.Pivot) pivot = TransformPivot.Center;
+				else if(pivot == TransformPivot.Center) pivot = TransformPivot.Pivot;
+				SetTargetPivot();
+			}
 
 			if(Input.GetKeyDown(SetSpaceToggle))
 			{
@@ -220,13 +230,73 @@ namespace RuntimeGizmos
 		{
 			if(selectedAxis == Axis.None && Input.GetMouseButtonDown(0))
 			{
+				DestroyTargetPivot();
+			
 				RaycastHit hitInfo; 
 				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo))
 				{
 					target = hitInfo.transform;
+					SetTargetPivot();
 				}else{
 					target = null;
 				}
+			}
+		}
+		
+		void SetTargetPivot()
+		{
+			DestroyTargetPivot();
+
+			if(target == null) return;
+
+			if(pivot == TransformPivot.Pivot)
+			{
+				//The target position is the pivot, so no need to do anything.
+				return;
+			}
+			else if(pivot == TransformPivot.Center)
+			{
+				Renderer targetRenderer = target.GetComponent<Renderer>();
+				if(targetRenderer == null)
+				{
+	#if UNITY_EDITOR
+					Debug.LogWarning("Runtime TransformGizmo cannot use Pivot Center mode since there is no Renderer on the selected object.");
+	#endif
+					return;
+				}
+
+				if(pivotTransform == null)
+				{
+					pivotTransform = new GameObject("TemporaryTransformGizmoPivot").transform;
+				}
+
+				pivotTransform.position = targetRenderer.bounds.center;
+				pivotTransform.rotation = target.rotation;
+
+				if(target.parent != null)
+				{
+					pivotTransform.SetParent(target.parent, true);
+				}
+
+				target.SetParent(pivotTransform, true);
+				target = pivotTransform;
+			}
+		}
+
+		void DestroyTargetPivot()
+		{
+			if(pivotTransform != null)
+			{
+				if(pivotTransform.childCount > 0)
+				{
+					target = pivotTransform.GetChild(0);
+					target.SetParent(pivotTransform.parent, true);
+				}else{
+					target = null;
+				}
+
+				GameObject.Destroy(pivotTransform.gameObject);
+				pivotTransform = null; //Need to do this so we can see right away that its destroyed, else we wont know until next frame.
 			}
 		}
 
