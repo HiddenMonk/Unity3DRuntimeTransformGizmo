@@ -273,10 +273,7 @@ namespace RuntimeGizmos
 				pivotTransform.position = targetRenderer.bounds.center;
 				pivotTransform.rotation = target.rotation;
 
-				if(target.parent != null)
-				{
-					pivotTransform.SetParent(target.parent, true);
-				}
+				pivotTransform.SetParent(target.parent, true);
 
 				target.SetParent(pivotTransform, true);
 				target = pivotTransform;
