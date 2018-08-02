@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 namespace RuntimeGizmos
@@ -19,11 +19,11 @@ namespace RuntimeGizmos
 					case 0:
 						return this.bottomLeft;
 					case 1:
-						return this.bottomRight;
-					case 2:
 						return this.topLeft;
-					case 3:
+					case 2:
 						return this.topRight;
+					case 3:
+						return this.bottomRight;
 					case 4:
 						return this.bottomLeft; //so we wrap around back to start
 					default:
