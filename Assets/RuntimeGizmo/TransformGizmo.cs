@@ -11,6 +11,8 @@ namespace RuntimeGizmos
 		public TransformSpace space = TransformSpace.Global;
 		public TransformType type = TransformType.Move;
 		public TransformPivot pivot = TransformPivot.Pivot;
+		public CenterType centerType = CenterType.All;
+		public ScaleType scaleType = ScaleType.FromPoint;
 
 		//These are the same as the unity editor hotkeys
 		public KeyCode SetMoveType = KeyCode.W;
@@ -18,6 +20,8 @@ namespace RuntimeGizmos
 		public KeyCode SetScaleType = KeyCode.R;
 		public KeyCode SetSpaceToggle = KeyCode.X;
 		public KeyCode SetPivotModeToggle = KeyCode.Z;
+		public KeyCode SetCenterTypeToggle = KeyCode.C;
+		public KeyCode SetScaleTypeToggle = KeyCode.S;
 
 		public Color xColor = new Color(1, 0, 0, 0.8f);
 		public Color yColor = new Color(0, 1, 0, 0.8f);
@@ -48,11 +52,11 @@ namespace RuntimeGizmos
 		Quaternion totalRotationAmount;
 		Axis nearAxis = Axis.None;
 		AxisInfo axisInfo;
+		Vector3 pivotPoint;
 		Transform target;
 		Camera myCamera;
 
 		static Material lineMaterial;
-		static Transform pivotTransform;
 
 		void Awake()
 		{
@@ -65,6 +69,11 @@ namespace RuntimeGizmos
 			SetSpaceAndType();
 			SetNearAxis();
 			GetTarget();
+
+#if UNITY_EDITOR
+			UpdatePivotPoint();
+#endif
+
 			if(target == null) return;
 			
 			TransformSelected();
@@ -133,7 +142,16 @@ namespace RuntimeGizmos
 			{
 				if(pivot == TransformPivot.Pivot) pivot = TransformPivot.Center;
 				else if(pivot == TransformPivot.Center) pivot = TransformPivot.Pivot;
-				SetTargetPivot();
+
+				SetPivotPoint();
+			}
+
+			if(Input.GetKeyDown(SetCenterTypeToggle))
+			{
+				if(centerType == CenterType.All) centerType = CenterType.Solo;
+				else if(centerType == CenterType.Solo) centerType = CenterType.All;
+
+				SetPivotPoint();
 			}
 
 			if(Input.GetKeyDown(SetSpaceToggle))
@@ -142,14 +160,27 @@ namespace RuntimeGizmos
 				else if(space == TransformSpace.Local) space = TransformSpace.Global;
 			}
 
-			if(type == TransformType.Scale) space = TransformSpace.Local; //Only support local scale
+			if(Input.GetKeyDown(SetScaleTypeToggle))
+			{
+				if(scaleType == ScaleType.FromPoint) scaleType = ScaleType.FromPointOffset;
+				else if(scaleType == ScaleType.FromPointOffset) scaleType = ScaleType.FromPoint;
+			}
+
+			if(type == TransformType.Scale)
+			{
+				space = TransformSpace.Local; //Only support local scale
+				if(pivot == TransformPivot.Pivot) scaleType = ScaleType.FromPoint; //FromPointOffset can be inaccurate and should only really be used in Center mode if desired.
+			}
 		}
 
 		void TransformSelected()
 		{
-			if(nearAxis != Axis.None && Input.GetMouseButtonDown(0))
+			if(target != null)
 			{
-				StartCoroutine(TransformSelected(type));
+				if(nearAxis != Axis.None && Input.GetMouseButtonDown(0))
+				{
+					StartCoroutine(TransformSelected(type));
+				}
 			}
 		}
 		
@@ -159,8 +190,9 @@ namespace RuntimeGizmos
 			totalScaleAmount = 0;
 			totalRotationAmount = Quaternion.identity;
 
-			Vector3 originalTargetPosition = target.position;
-			Vector3 planeNormal = (transform.position - target.position).normalized;
+			Vector3 originalPivot = pivotPoint;
+
+			Vector3 planeNormal = (transform.position - originalPivot).normalized;
 			Vector3 axis = GetNearAxisDirection();
 			Vector3 projectedAxis = Vector3.ProjectOnPlane(axis, planeNormal).normalized;
 			Vector3 previousMousePosition = Vector3.zero;
@@ -168,17 +200,19 @@ namespace RuntimeGizmos
 			while(!Input.GetMouseButtonUp(0))
 			{
 				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
-				Vector3 mousePosition = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, originalTargetPosition, planeNormal);
+				Vector3 mousePosition = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, originalPivot, planeNormal);
 
 				if(previousMousePosition != Vector3.zero && mousePosition != Vector3.zero)
 				{
 					if(type == TransformType.Move)
 					{
 						float moveAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projectedAxis) * moveSpeedMultiplier;
-						target.Translate(axis * moveAmount, Space.World);
-					}
+						Vector3 movement = axis * moveAmount;
+						target.Translate(movement, Space.World);
 
-					if(type == TransformType.Scale)
+						SetPivotPointOffset(movement);
+					}
+					else if(type == TransformType.Scale)
 					{
 						Vector3 projected = (nearAxis == Axis.Any) ? transform.right : projectedAxis;
 						float scaleAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * scaleSpeedMultiplier;
@@ -186,25 +220,55 @@ namespace RuntimeGizmos
 						//WARNING - There is a bug in unity 5.4 and 5.5 that causes InverseTransformDirection to be affected by scale which will break negative scaling. Not tested, but updating to 5.4.2 should fix it - https://issuetracker.unity3d.com/issues/transformdirection-and-inversetransformdirection-operations-are-affected-by-scale
 						Vector3 localAxis = (space == TransformSpace.Local && nearAxis != Axis.Any) ? target.InverseTransformDirection(axis) : axis;
 						
-						if(nearAxis == Axis.Any) target.localScale += (ExtVector3.Abs(target.localScale.normalized) * scaleAmount);
-						else target.localScale += (localAxis * scaleAmount);
+						Vector3 targetScaleAmount = Vector3.one;
+						if(nearAxis == Axis.Any) targetScaleAmount = (ExtVector3.Abs(target.localScale.normalized) * scaleAmount);
+						else targetScaleAmount = localAxis * scaleAmount;
+
+						Vector3 targetScale = target.localScale + targetScaleAmount;
+
+						if(pivot == TransformPivot.Pivot)
+						{
+							target.localScale = targetScale;
+						}
+						else if(pivot == TransformPivot.Center)
+						{
+							if(scaleType == ScaleType.FromPoint)
+							{
+								target.SetScaleFrom(originalPivot, targetScale);
+							}
+							else if(scaleType == ScaleType.FromPointOffset)
+							{
+								target.SetScaleFromOffset(originalPivot, targetScale);
+							}
+						}
 					
 						totalScaleAmount += scaleAmount;
 					}
-
-					if(type == TransformType.Rotate)
+					else if(type == TransformType.Rotate)
 					{
+						float rotateAmount = 0;
+						Vector3 rotationAxis = axis;
+
 						if(nearAxis == Axis.Any)
 						{
 							Vector3 rotation = transform.TransformDirection(new Vector3(Input.GetAxis("Mouse Y"), -Input.GetAxis("Mouse X"), 0));
-							target.Rotate(rotation * allRotateSpeedMultiplier, Space.World);
-							totalRotationAmount *= Quaternion.Euler(rotation * allRotateSpeedMultiplier);
+							Quaternion.Euler(rotation).ToAngleAxis(out rotateAmount, out rotationAxis);
+							rotateAmount *= allRotateSpeedMultiplier;
 						}else{
 							Vector3 projected = (nearAxis == Axis.Any || ExtVector3.IsParallel(axis, planeNormal)) ? planeNormal : Vector3.Cross(axis, planeNormal);
-							float rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
-							target.Rotate(axis, rotateAmount, Space.World);
-							totalRotationAmount *= Quaternion.Euler(axis * rotateAmount);
+							rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
 						}
+
+						if(pivot == TransformPivot.Pivot)
+						{
+							target.Rotate(rotationAxis, rotateAmount, Space.World);
+						}
+						else if(pivot == TransformPivot.Center)
+						{
+							target.RotateAround(originalPivot, rotationAxis, rotateAmount);
+						}
+
+						totalRotationAmount *= Quaternion.Euler(rotationAxis * rotateAmount);
 					}
 				}
 
@@ -216,6 +280,8 @@ namespace RuntimeGizmos
 			totalRotationAmount = Quaternion.identity;
 			totalScaleAmount = 0;
 			isTransforming = false;
+
+			SetPivotPoint();
 		}
 
 		Vector3 GetNearAxisDirection()
@@ -234,71 +300,34 @@ namespace RuntimeGizmos
 		{
 			if(nearAxis == Axis.None && Input.GetMouseButtonDown(0))
 			{
-				DestroyTargetPivot();
-
 				RaycastHit hitInfo; 
 				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo))
 				{
 					target = hitInfo.transform;
-					SetTargetPivot();
+					SetPivotPoint();
 				}else{
 					target = null;
 				}
 			}
 		}
 
-		void SetTargetPivot()
+		void SetPivotPoint()
 		{
-			DestroyTargetPivot();
-
-			if(target == null) return;
-
-			if(pivot == TransformPivot.Pivot)
+			if(target != null)
 			{
-				//The target position is the pivot, so no need to do anything.
-				return;
-			}
-			else if(pivot == TransformPivot.Center)
-			{
-				Renderer targetRenderer = target.GetComponent<Renderer>();
-				if(targetRenderer == null)
+				if(pivot == TransformPivot.Pivot)
 				{
-	#if UNITY_EDITOR
-					Debug.LogWarning("Runtime TransformGizmo cannot use Pivot Center mode since there is no Renderer on the selected object.");
-	#endif
-					return;
+					pivotPoint = target.position;
 				}
-
-				if(pivotTransform == null)
+				else if(pivot == TransformPivot.Center)
 				{
-					pivotTransform = new GameObject("TemporaryTransformGizmoPivot").transform;
+					pivotPoint = target.GetCenter(centerType);
 				}
-
-				pivotTransform.position = targetRenderer.bounds.center;
-				pivotTransform.rotation = target.rotation;
-
-				pivotTransform.SetParent(target.parent, true);
-
-				target.SetParent(pivotTransform, true);
-				target = pivotTransform;
 			}
 		}
-
-		void DestroyTargetPivot()
+		void SetPivotPointOffset(Vector3 offset)
 		{
-			if(pivotTransform != null)
-			{
-				if(pivotTransform.childCount > 0)
-				{
-					target = pivotTransform.GetChild(0);
-					target.SetParent(pivotTransform.parent, true);
-				}else{
-					target = null;
-				}
-
-				GameObject.Destroy(pivotTransform.gameObject);
-				pivotTransform = null; //Need to do this so we can see right away that its destroyed, else we wont know until next frame.
-			}
+			pivotPoint += offset;
 		}
 
 		AxisVectors axisVectorsBuffer = new AxisVectors();
@@ -356,8 +385,8 @@ namespace RuntimeGizmos
 			else if(type == TransformType.Rotate && target != null)
 			{
 				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
-				Vector3 mousePlaneHit = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, target.position, (transform.position - target.position).normalized);
-				if((target.position - mousePlaneHit).sqrMagnitude <= (handleLength * GetDistanceMultiplier()).Squared()) nearAxis = Axis.Any;
+				Vector3 mousePlaneHit = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, pivotPoint, (transform.position - pivotPoint).normalized);
+				if((pivotPoint - mousePlaneHit).sqrMagnitude <= (handleLength * GetDistanceMultiplier()).Squared()) nearAxis = Axis.Any;
 			}
 		}
 
@@ -381,11 +410,11 @@ namespace RuntimeGizmos
 		void SetAxisInfo()
 		{
 			float size = handleLength * GetDistanceMultiplier();
-			axisInfo.Set(target, size, space);
+			axisInfo.Set(target, pivotPoint, size, space);
 
 			if(isTransforming && type == TransformType.Scale)
 			{
-				if(nearAxis == Axis.Any) axisInfo.Set(target, size + totalScaleAmount, space);
+				if(nearAxis == Axis.Any) axisInfo.Set(target, pivotPoint, size + totalScaleAmount, space);
 				if(nearAxis == Axis.X) axisInfo.xAxisEnd += (axisInfo.xDirection * totalScaleAmount);
 				if(nearAxis == Axis.Y) axisInfo.yAxisEnd += (axisInfo.yDirection * totalScaleAmount);
 				if(nearAxis == Axis.Z) axisInfo.zAxisEnd += (axisInfo.zDirection * totalScaleAmount);
@@ -396,7 +425,7 @@ namespace RuntimeGizmos
 		float GetDistanceMultiplier()
 		{
 			if(target == null) return 0f;
-			return Mathf.Max(.01f, Mathf.Abs(ExtVector3.MagnitudeInDirection(target.position - transform.position, myCamera.transform.forward)));
+			return Mathf.Max(.01f, Mathf.Abs(ExtVector3.MagnitudeInDirection(pivotPoint - transform.position, myCamera.transform.forward)));
 		}
 
 		void SetLines()
@@ -416,13 +445,13 @@ namespace RuntimeGizmos
 				float distanceMultiplier = GetDistanceMultiplier();
 				float lineWidth = handleWidth * distanceMultiplier;
 				//When scaling, the axis will have different line lengths and direction.
-				float xLineLength = Vector3.Distance(target.position, axisInfo.xAxisEnd) * AxisDirectionMultiplier(axisInfo.xAxisEnd - target.position, axisInfo.xDirection);
-				float yLineLength = Vector3.Distance(target.position, axisInfo.yAxisEnd) * AxisDirectionMultiplier(axisInfo.yAxisEnd - target.position, axisInfo.yDirection);
-				float zLineLength = Vector3.Distance(target.position, axisInfo.zAxisEnd) * AxisDirectionMultiplier(axisInfo.zAxisEnd - target.position, axisInfo.zDirection);
+				float xLineLength = Vector3.Distance(pivotPoint, axisInfo.xAxisEnd) * AxisDirectionMultiplier(axisInfo.xAxisEnd - pivotPoint, axisInfo.xDirection);
+				float yLineLength = Vector3.Distance(pivotPoint, axisInfo.yAxisEnd) * AxisDirectionMultiplier(axisInfo.yAxisEnd - pivotPoint, axisInfo.yDirection);
+				float zLineLength = Vector3.Distance(pivotPoint, axisInfo.zAxisEnd) * AxisDirectionMultiplier(axisInfo.zAxisEnd - pivotPoint, axisInfo.zDirection);
 
-				AddQuads(target.position, axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, xLineLength, lineWidth, handleLines.x);
-				AddQuads(target.position, axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, yLineLength, lineWidth, handleLines.y);
-				AddQuads(target.position, axisInfo.zDirection, axisInfo.xDirection, axisInfo.yDirection, zLineLength, lineWidth, handleLines.z);
+				AddQuads(pivotPoint, axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, xLineLength, lineWidth, handleLines.x);
+				AddQuads(pivotPoint, axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, yLineLength, lineWidth, handleLines.y);
+				AddQuads(pivotPoint, axisInfo.zDirection, axisInfo.xDirection, axisInfo.yDirection, zLineLength, lineWidth, handleLines.z);
 			}
 		}
 		int AxisDirectionMultiplier(Vector3 direction, Vector3 otherDirection)
@@ -473,7 +502,7 @@ namespace RuntimeGizmos
 				AddSquares(axisInfo.xAxisEnd, axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, boxSize, handleSquares.x);
 				AddSquares(axisInfo.yAxisEnd, axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, boxSize, handleSquares.y);
 				AddSquares(axisInfo.zAxisEnd, axisInfo.zDirection, axisInfo.xDirection, axisInfo.yDirection, boxSize, handleSquares.z);
-				AddSquares(target.position - (axisInfo.xDirection * (boxSize * .5f)), axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, boxSize, handleSquares.all);
+				AddSquares(pivotPoint - (axisInfo.xDirection * (boxSize * .5f)), axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, boxSize, handleSquares.all);
 			}
 		}
 
@@ -530,10 +559,10 @@ namespace RuntimeGizmos
 			if(type == TransformType.Rotate)
 			{
 				float circleLength = handleLength * GetDistanceMultiplier();
-				AddCircle(target.position, axisInfo.xDirection, circleLength, axisVectors.x);
-				AddCircle(target.position, axisInfo.yDirection, circleLength, axisVectors.y);
-				AddCircle(target.position, axisInfo.zDirection, circleLength, axisVectors.z);
-				AddCircle(target.position, (target.position - transform.position).normalized, circleLength, axisVectors.all, false);
+				AddCircle(pivotPoint, axisInfo.xDirection, circleLength, axisVectors.x);
+				AddCircle(pivotPoint, axisInfo.yDirection, circleLength, axisVectors.y);
+				AddCircle(pivotPoint, axisInfo.zDirection, circleLength, axisVectors.z);
+				AddCircle(pivotPoint, (pivotPoint - transform.position).normalized, circleLength, axisVectors.all, false);
 			}
 		}
 
@@ -561,7 +590,7 @@ namespace RuntimeGizmos
 			Vector3 nextPoint = Vector3.zero;
 			float multiplier = 360f / circleDetail;
 
-			Plane plane = new Plane((transform.position - target.position).normalized, target.position);
+			Plane plane = new Plane((transform.position - pivotPoint).normalized, pivotPoint);
 
 			float circleHandleWidth = handleWidth * GetDistanceMultiplier();
 
@@ -674,5 +703,24 @@ namespace RuntimeGizmos
 				#endregion
 			}
 		}
+
+#if UNITY_EDITOR
+		//This is mainly so if you move the object in the scene editor, the handles will be updated and drawn correctly. Not important at runtime.
+		Vector3 prevTargetPosition;
+		void UpdatePivotPoint()
+		{
+			if(target != null && !isTransforming)
+			{
+				if(target.position != prevTargetPosition && prevTargetPosition != Vector3.zero)
+				{
+					SetPivotPointOffset(target.position - prevTargetPosition);
+				}
+
+				prevTargetPosition = target.position;
+			}else{
+				prevTargetPosition = Vector3.zero;
+			}
+		}
+#endif
 	}
 }
