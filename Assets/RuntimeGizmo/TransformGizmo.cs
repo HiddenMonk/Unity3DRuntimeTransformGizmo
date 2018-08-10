@@ -707,18 +707,21 @@ namespace RuntimeGizmos
 #if UNITY_EDITOR
 		//This is mainly so if you move the object in the scene editor, the handles will be updated and drawn correctly. Not important at runtime.
 		Vector3 prevTargetPosition;
+		Transform prevTarget;
 		void UpdatePivotPoint()
 		{
 			if(target != null && !isTransforming)
 			{
-				if(target.position != prevTargetPosition && prevTargetPosition != Vector3.zero)
+				if(target.position != prevTargetPosition && prevTarget == target)
 				{
 					SetPivotPointOffset(target.position - prevTargetPosition);
 				}
 
 				prevTargetPosition = target.position;
+				prevTarget = target;
 			}else{
 				prevTargetPosition = Vector3.zero;
+				prevTarget = null;
 			}
 		}
 #endif
