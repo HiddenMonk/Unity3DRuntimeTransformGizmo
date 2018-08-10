@@ -12,7 +12,7 @@ namespace RuntimeGizmos
 		public Vector3 yDirection;
 		public Vector3 zDirection;
 
-		public void Set(Transform target, float handleLength, TransformSpace space)
+		public void Set(Transform target, Vector3 pivot, float handleLength, TransformSpace space)
 		{
 			if(space == TransformSpace.Global)
 			{
@@ -27,9 +27,9 @@ namespace RuntimeGizmos
 				zDirection = target.forward;
 			}
 
-			xAxisEnd = target.position + (xDirection * handleLength);
-			yAxisEnd = target.position + (yDirection * handleLength);
-			zAxisEnd = target.position + (zDirection * handleLength);
+			xAxisEnd = pivot + (xDirection * handleLength);
+			yAxisEnd = pivot + (yDirection * handleLength);
+			zAxisEnd = pivot + (zDirection * handleLength);
 		}
 	}
 }
