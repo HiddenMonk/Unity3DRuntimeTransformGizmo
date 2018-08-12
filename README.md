@@ -9,6 +9,12 @@ WARNING - There is a bug in unity 5.4 and 5.5 that causes InverseTransformDirect
 I have also ran into a unity bug (Unity 2017.2.0f3 (64-bit)) where when rotating a object (it was skewed, not sure if that matters) it will sometimes not have its mesh collider updated or something, causing me to not be able to click it again in certain spots until I disable and reenable the mesh collider in the inspector.
 Reenabling the mesh collider also updated where unity saw the center of the object to be.
 Maybe related to this bug? https://issuetracker.unity3d.com/issues/colliders-are-not-updating-to-match-attached-gameobject-location
+
+There is also a bug where if you have multiple objects selected in the unity editor and then you select the last selected of those selected objects, unity will start throwing the error
+"type is not a supported pptr value
+UnityEngine.GUIUtility:ProcessEvent(Int32, IntPtr)"
+It seems to be the mesh renderer in the inspector is having issues realizing that we added a new material to it (the highlight selected material).
+If you collapse the mesh renderer, the errors will stop.
 _________
 
 Just place the TransformGizmo on a gameobject with a camera.
@@ -30,4 +36,7 @@ I talk about this more in this thread https://forum.unity.com/threads/scale-from
 There may also be some differences between unity and how I have things set up currently in regards to Center pivots,
 such as unity seems to use colliders first to find how much weight the object has or something to decide how much it effects the center,
 but for now we only look at the Renderer.bounds.center, so expect some differences between unity.
+
+
+Also Added the ability to select multiple objects =)
 
