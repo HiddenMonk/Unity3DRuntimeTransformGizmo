@@ -56,6 +56,8 @@ namespace RuntimeGizmos
 		Transform target;
 		Camera myCamera;
 
+		List<Renderer> highlightedRenderers = new List<Renderer>();
+
 		static Material lineMaterial;
 		static Material outlineMaterial;
 
@@ -68,6 +70,11 @@ namespace RuntimeGizmos
 		void OnDisable()
 		{
 			SetTarget(null); //Just so things gets cleaned up, such as removing any materials we placed on objects.
+		}
+
+		void OnDestroy()
+		{
+			ClearHighlightedRenderers();
 		}
 
 		void Update()
@@ -318,54 +325,60 @@ namespace RuntimeGizmos
 
 		void SetTarget(Transform newTarget)
 		{
-			if(target != null)
-			{
-				SetHighlighTarget(false);
-			}
+			ClearHighlightedRenderers();
 
 			target = newTarget;
 
 			if(target != null)
 			{
-				SetHighlighTarget(true);
+				SetHighlighTarget();
 				SetPivotPoint();
 			}
 		}
 
-		List<Renderer> renderersBuffer = new List<Renderer>();
 		List<Material> materialsBuffer = new List<Material>();
-		void SetHighlighTarget(bool isHighlighted)
+		void SetHighlighTarget()
 		{
 			if(target != null)
 			{
-				renderersBuffer.Clear();
-				target.GetComponentsInChildren<Renderer>(true, renderersBuffer);
+				ClearHighlightedRenderers();
+				target.GetComponentsInChildren<Renderer>(true, highlightedRenderers);
 
-				for(int i = 0; i < renderersBuffer.Count; i++)
+				for(int i = 0; i < highlightedRenderers.Count; i++)
 				{
-					Renderer render = renderersBuffer[i];
+					Renderer render = highlightedRenderers[i];
 					materialsBuffer.Clear();
 					materialsBuffer.AddRange(render.sharedMaterials);
 
-					if(isHighlighted)
+					if(!materialsBuffer.Contains(outlineMaterial))
 					{
-						if(!materialsBuffer.Contains(outlineMaterial))
-						{
-							materialsBuffer.Add(outlineMaterial);
-							render.materials = materialsBuffer.ToArray();
-						}
-					}else{
-						if(materialsBuffer.Contains(outlineMaterial))
-						{
-							materialsBuffer.Remove(outlineMaterial);
-							render.materials = materialsBuffer.ToArray();
-						}
+						materialsBuffer.Add(outlineMaterial);
+						render.materials = materialsBuffer.ToArray();
 					}
 				}
 
-				renderersBuffer.Clear();
 				materialsBuffer.Clear();
 			}
+		}
+
+		void ClearHighlightedRenderers()
+		{
+			for(int i = 0; i < highlightedRenderers.Count; i++)
+			{
+				Renderer render = highlightedRenderers[i];
+				if(render != null)
+				{
+					materialsBuffer.Clear();
+					materialsBuffer.AddRange(render.sharedMaterials);
+
+					if(materialsBuffer.Contains(outlineMaterial))
+					{
+						materialsBuffer.Remove(outlineMaterial);
+						render.materials = materialsBuffer.ToArray();
+					}
+				}
+			}
+			highlightedRenderers.Clear();
 		}
 
 		void SetPivotPoint()
