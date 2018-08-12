@@ -57,11 +57,18 @@ namespace RuntimeGizmos
 		Camera myCamera;
 
 		static Material lineMaterial;
+		static Material outlineMaterial;
+		static string outlineMaterialName = "TransformGizmoOutlineMaterial";
 
 		void Awake()
 		{
 			myCamera = GetComponent<Camera>();
 			SetMaterial();
+		}
+
+		void OnDisable()
+		{
+			SetTarget(null); //Just so things gets cleaned up, such as removing any materials we placed on objects.
 		}
 
 		void Update()
@@ -303,11 +310,62 @@ namespace RuntimeGizmos
 				RaycastHit hitInfo; 
 				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo))
 				{
-					target = hitInfo.transform;
-					SetPivotPoint();
+					SetTarget(hitInfo.transform);
 				}else{
-					target = null;
+					SetTarget(null);
 				}
+			}
+		}
+
+		void SetTarget(Transform newTarget)
+		{
+			if(target != null)
+			{
+				SetHighlighTarget(false);
+			}
+
+			target = newTarget;
+
+			if(target != null)
+			{
+				SetHighlighTarget(true);
+				SetPivotPoint();
+			}
+		}
+
+		List<Renderer> renderersBuffer = new List<Renderer>();
+		List<Material> materialsBuffer = new List<Material>();
+		void SetHighlighTarget(bool isHighlighted)
+		{
+			if(target != null)
+			{
+				renderersBuffer.Clear();
+				target.GetComponentsInChildren<Renderer>(true, renderersBuffer);
+
+				for(int i = 0; i < renderersBuffer.Count; i++)
+				{
+					Renderer render = renderersBuffer[i];
+					materialsBuffer.Clear();
+					materialsBuffer.AddRange(render.sharedMaterials);
+
+					if(isHighlighted)
+					{
+						if(!materialsBuffer.Contains(outlineMaterial))
+						{
+							materialsBuffer.Add(outlineMaterial);
+							render.materials = materialsBuffer.ToArray();
+						}
+					}else{
+						if(materialsBuffer.Contains(outlineMaterial))
+						{
+							materialsBuffer.Remove(outlineMaterial);
+							render.materials = materialsBuffer.ToArray();
+						}
+					}
+				}
+
+				renderersBuffer.Clear();
+				materialsBuffer.Clear();
 			}
 		}
 
@@ -677,30 +735,7 @@ namespace RuntimeGizmos
 			if(lineMaterial == null)
 			{
 				lineMaterial = new Material(Shader.Find("Custom/Lines"));
-				#region Shader code
-				/*
-				Shader "Custom/Lines"
-				{
-					SubShader
-					{
-						Pass
-						{
-							Blend SrcAlpha OneMinusSrcAlpha
-							ZWrite Off
-							ZTest Always
-							Cull Off
-							Fog { Mode Off }
-
-							BindChannels
-							{
-								Bind "vertex", vertex
-								Bind "color", color
-							}
-						}
-					}
-				}
-				*/
-				#endregion
+				outlineMaterial = new Material(Shader.Find("Custom/Outline"));
 			}
 		}
 
