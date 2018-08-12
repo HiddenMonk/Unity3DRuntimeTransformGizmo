@@ -503,32 +503,40 @@ namespace RuntimeGizmos
 		}
 		void RemoveTargetRoot(Transform targetRoot)
 		{
-			targetRoots.Remove(targetRoot);
-			targetRootsOrdered.Remove(targetRoot);
+			if(targetRoots.Remove(targetRoot))
+			{
+				targetRootsOrdered.Remove(targetRoot);
 
-			RemoveAllChildren(targetRoot);
+				RemoveAllChildren(targetRoot);
+			}
 		}
 
 		void AddAllChildren(Transform target)
 		{
 			childrenBuffer.Clear();
 			target.GetComponentsInChildren<Transform>(true, childrenBuffer);
+			childrenBuffer.Remove(target);
 
 			for(int i = 0; i < childrenBuffer.Count; i++)
 			{
-				children.Add(childrenBuffer[i]);
+				Transform child = childrenBuffer[i];
+				children.Add(child);
+				RemoveTargetRoot(child); //We do this in case we selected child first and then the parent.
 			}
+
 			childrenBuffer.Clear();
 		}
 		void RemoveAllChildren(Transform target)
 		{
 			childrenBuffer.Clear();
 			target.GetComponentsInChildren<Transform>(true, childrenBuffer);
+			childrenBuffer.Remove(target);
 
 			for(int i = 0; i < childrenBuffer.Count; i++)
 			{
 				children.Remove(childrenBuffer[i]);
 			}
+
 			childrenBuffer.Clear();
 		}
 
