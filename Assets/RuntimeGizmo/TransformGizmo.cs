@@ -5,6 +5,10 @@ using System.Collections;
 
 namespace RuntimeGizmos
 {
+	//To be safe, if you are changing any transforms hierarchy, such as parenting an object to something,
+	//you should call ClearTargets before doing so just to be sure nothing unexpected happens...
+	//For example, if you select an object that has children, move the children elsewhere, deselect the original object, then try to add those old children to the selection, I think it wont work.
+
 	[RequireComponent(typeof(Camera))]
 	public class TransformGizmo : MonoBehaviour
 	{
@@ -22,6 +26,8 @@ namespace RuntimeGizmos
 		public KeyCode SetPivotModeToggle = KeyCode.Z;
 		public KeyCode SetCenterTypeToggle = KeyCode.C;
 		public KeyCode SetScaleTypeToggle = KeyCode.S;
+		public KeyCode AddSelection = KeyCode.LeftShift;
+		public KeyCode RemoveSelection = KeyCode.LeftControl;
 
 		public Color xColor = new Color(1, 0, 0, 0.8f);
 		public Color yColor = new Color(0, 1, 0, 0.8f);
@@ -29,6 +35,8 @@ namespace RuntimeGizmos
 		public Color allColor = new Color(.7f, .7f, .7f, 0.8f);
 		public Color selectedColor = new Color(1, 1, 0, 0.8f);
 		public Color hoverColor = new Color(1, .75f, 0, 0.8f);
+
+		public bool useFirstSelectedAsMain = true;
 
 		public float handleLength = .25f;
 		public float handleWidth = .003f;
@@ -52,11 +60,22 @@ namespace RuntimeGizmos
 		Quaternion totalRotationAmount;
 		Axis nearAxis = Axis.None;
 		AxisInfo axisInfo;
-		Vector3 pivotPoint;
-		Transform target;
-		Camera myCamera;
 
-		List<Renderer> highlightedRenderers = new List<Renderer>();
+		Vector3 pivotPoint;
+		Vector3 totalCenterPivotPoint;
+
+		//We use a HashSet and a List for targetRoots so that we get fast lookup with the hashset while also keeping track of the order with the list.
+		Transform mainTargetRoot {get {return (targetRootsOrdered.Count > 0) ? (useFirstSelectedAsMain) ? targetRootsOrdered[0] : targetRootsOrdered[targetRootsOrdered.Count - 1] : null;}}
+		List<Transform> targetRootsOrdered = new List<Transform>();
+		Dictionary<Transform, TargetInfo> targetRoots = new Dictionary<Transform, TargetInfo>();
+		HashSet<Renderer> highlightedRenderers = new HashSet<Renderer>();
+		HashSet<Transform> children = new HashSet<Transform>();
+
+		List<Transform> childrenBuffer = new List<Transform>();
+		List<Renderer> renderersBuffer = new List<Renderer>();
+		List<Material> materialsBuffer = new List<Material>();
+
+		Camera myCamera;
 
 		static Material lineMaterial;
 		static Material outlineMaterial;
@@ -69,12 +88,12 @@ namespace RuntimeGizmos
 
 		void OnDisable()
 		{
-			SetTarget(null); //Just so things gets cleaned up, such as removing any materials we placed on objects.
+			ClearTargets(); //Just so things gets cleaned up, such as removing any materials we placed on objects.
 		}
 
 		void OnDestroy()
 		{
-			ClearHighlightedRenderers();
+			ClearAllHighlightedRenderers();
 		}
 
 		void Update()
@@ -87,14 +106,14 @@ namespace RuntimeGizmos
 			UpdatePivotPoint();
 #endif
 
-			if(target == null) return;
+			if(mainTargetRoot == null) return;
 			
 			TransformSelected();
 		}
 
 		void LateUpdate()
 		{
-			if(target == null) return;
+			if(mainTargetRoot == null) return;
 
 			//We run this in lateupdate since coroutines run after update and we want our gizmos to have the updated target transform position after TransformSelected()
 			SetAxisInfo();
@@ -103,7 +122,7 @@ namespace RuntimeGizmos
 
 		void OnPostRender()
 		{
-			if(target == null) return;
+			if(mainTargetRoot == null) return;
 
 			lineMaterial.SetPass(0);
 
@@ -188,7 +207,7 @@ namespace RuntimeGizmos
 
 		void TransformSelected()
 		{
-			if(target != null)
+			if(mainTargetRoot != null)
 			{
 				if(nearAxis != Axis.None && Input.GetMouseButtonDown(0))
 				{
@@ -221,7 +240,13 @@ namespace RuntimeGizmos
 					{
 						float moveAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projectedAxis) * moveSpeedMultiplier;
 						Vector3 movement = axis * moveAmount;
-						target.Translate(movement, Space.World);
+
+						for(int i = 0; i < targetRootsOrdered.Count; i++)
+						{
+							Transform target = targetRootsOrdered[i];
+
+							target.Translate(movement, Space.World);
+						}
 
 						SetPivotPointOffset(movement);
 					}
@@ -231,30 +256,35 @@ namespace RuntimeGizmos
 						float scaleAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * scaleSpeedMultiplier;
 						
 						//WARNING - There is a bug in unity 5.4 and 5.5 that causes InverseTransformDirection to be affected by scale which will break negative scaling. Not tested, but updating to 5.4.2 should fix it - https://issuetracker.unity3d.com/issues/transformdirection-and-inversetransformdirection-operations-are-affected-by-scale
-						Vector3 localAxis = (space == TransformSpace.Local && nearAxis != Axis.Any) ? target.InverseTransformDirection(axis) : axis;
+						Vector3 localAxis = (space == TransformSpace.Local && nearAxis != Axis.Any) ? mainTargetRoot.InverseTransformDirection(axis) : axis;
 						
 						Vector3 targetScaleAmount = Vector3.one;
-						if(nearAxis == Axis.Any) targetScaleAmount = (ExtVector3.Abs(target.localScale.normalized) * scaleAmount);
+						if(nearAxis == Axis.Any) targetScaleAmount = (ExtVector3.Abs(mainTargetRoot.localScale.normalized) * scaleAmount);
 						else targetScaleAmount = localAxis * scaleAmount;
 
-						Vector3 targetScale = target.localScale + targetScaleAmount;
+						for(int i = 0; i < targetRootsOrdered.Count; i++)
+						{
+							Transform target = targetRootsOrdered[i];
 
-						if(pivot == TransformPivot.Pivot)
-						{
-							target.localScale = targetScale;
-						}
-						else if(pivot == TransformPivot.Center)
-						{
-							if(scaleType == ScaleType.FromPoint)
+							Vector3 targetScale = target.localScale + targetScaleAmount;
+
+							if(pivot == TransformPivot.Pivot)
 							{
-								target.SetScaleFrom(originalPivot, targetScale);
+								target.localScale = targetScale;
 							}
-							else if(scaleType == ScaleType.FromPointOffset)
+							else if(pivot == TransformPivot.Center)
 							{
-								target.SetScaleFromOffset(originalPivot, targetScale);
+								if(scaleType == ScaleType.FromPoint)
+								{
+									target.SetScaleFrom(originalPivot, targetScale);
+								}
+								else if(scaleType == ScaleType.FromPointOffset)
+								{
+									target.SetScaleFromOffset(originalPivot, targetScale);
+								}
 							}
 						}
-					
+
 						totalScaleAmount += scaleAmount;
 					}
 					else if(type == TransformType.Rotate)
@@ -272,13 +302,18 @@ namespace RuntimeGizmos
 							rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
 						}
 
-						if(pivot == TransformPivot.Pivot)
+						for(int i = 0; i < targetRootsOrdered.Count; i++)
 						{
-							target.Rotate(rotationAxis, rotateAmount, Space.World);
-						}
-						else if(pivot == TransformPivot.Center)
-						{
-							target.RotateAround(originalPivot, rotationAxis, rotateAmount);
+							Transform target = targetRootsOrdered[i];
+
+							if(pivot == TransformPivot.Pivot)
+							{
+								target.Rotate(rotationAxis, rotateAmount, Space.World);
+							}
+							else if(pivot == TransformPivot.Center)
+							{
+								target.RotateAround(originalPivot, rotationAxis, rotateAmount);
+							}
 						}
 
 						totalRotationAmount *= Quaternion.Euler(rotationAxis * rotateAmount);
@@ -313,47 +348,93 @@ namespace RuntimeGizmos
 		{
 			if(nearAxis == Axis.None && Input.GetMouseButtonDown(0))
 			{
+				bool isAdding = Input.GetKey(AddSelection);
+				bool isRemoving = Input.GetKey(RemoveSelection);
+
 				RaycastHit hitInfo; 
 				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo))
 				{
-					SetTarget(hitInfo.transform);
+					Transform target = hitInfo.transform;
+
+					if(isAdding)
+					{
+						AddTarget(target);
+					}
+					else if(isRemoving)
+					{
+						RemoveTarget(target);
+					}
+					else if(!isAdding && !isRemoving)
+					{
+						ClearTargets();
+						AddTarget(target);
+					}
 				}else{
-					SetTarget(null);
+					if(!isAdding && !isRemoving)
+					{
+						ClearTargets();
+					}
 				}
 			}
 		}
 
-		void SetTarget(Transform newTarget)
+		void AddTarget(Transform target)
 		{
-			ClearHighlightedRenderers();
-
-			target = newTarget;
-
 			if(target != null)
 			{
-				SetHighlighTarget();
+				if(targetRoots.ContainsKey(target)) return;
+				if(children.Contains(target)) return;
+
+				AddTargetRoot(target);
+				AddTargetHighlightedRenderers(target);
+
 				SetPivotPoint();
 			}
 		}
 
-		List<Material> materialsBuffer = new List<Material>();
-		void SetHighlighTarget()
+		void RemoveTarget(Transform target)
 		{
 			if(target != null)
 			{
-				ClearHighlightedRenderers();
-				target.GetComponentsInChildren<Renderer>(true, highlightedRenderers);
+				if(!targetRoots.ContainsKey(target)) return;
 
-				for(int i = 0; i < highlightedRenderers.Count; i++)
+				RemoveTargetHighlightedRenderers(target);
+				RemoveTargetRoot(target);
+
+				SetPivotPoint();
+			}
+		}
+
+		public void ClearTargets()
+		{
+			ClearAllHighlightedRenderers();
+			targetRoots.Clear();
+			targetRootsOrdered.Clear();
+			children.Clear();
+		}
+
+		void AddTargetHighlightedRenderers(Transform target)
+		{
+			if(target != null)
+			{
+				GetTargetRenderers(target, renderersBuffer);
+
+				for(int i = 0; i < renderersBuffer.Count; i++)
 				{
-					Renderer render = highlightedRenderers[i];
-					materialsBuffer.Clear();
-					materialsBuffer.AddRange(render.sharedMaterials);
+					Renderer render = renderersBuffer[i];
 
-					if(!materialsBuffer.Contains(outlineMaterial))
+					if(!highlightedRenderers.Contains(render))
 					{
-						materialsBuffer.Add(outlineMaterial);
-						render.materials = materialsBuffer.ToArray();
+						materialsBuffer.Clear();
+						materialsBuffer.AddRange(render.sharedMaterials);
+
+						if(!materialsBuffer.Contains(outlineMaterial))
+						{
+							materialsBuffer.Add(outlineMaterial);
+							render.materials = materialsBuffer.ToArray();
+						}
+
+						highlightedRenderers.Add(render);
 					}
 				}
 
@@ -361,11 +442,40 @@ namespace RuntimeGizmos
 			}
 		}
 
-		void ClearHighlightedRenderers()
+		void GetTargetRenderers(Transform target, List<Renderer> renderers)
 		{
-			for(int i = 0; i < highlightedRenderers.Count; i++)
+			renderers.Clear();
+			if(target != null)
 			{
-				Renderer render = highlightedRenderers[i];
+				target.GetComponentsInChildren<Renderer>(true, renderers);
+			}
+		}
+
+		void ClearAllHighlightedRenderers()
+		{
+			foreach(var target in targetRoots)
+			{
+				RemoveTargetHighlightedRenderers(target.Key);
+			}
+
+			//In case any are still left, such as if they changed parents or what not when they were highlighted.
+			renderersBuffer.Clear();
+			renderersBuffer.AddRange(highlightedRenderers);
+			RemoveHighlightedRenderers(renderersBuffer);
+		}
+
+		void RemoveTargetHighlightedRenderers(Transform target)
+		{
+			GetTargetRenderers(target, renderersBuffer);
+
+			RemoveHighlightedRenderers(renderersBuffer);
+		}
+
+		void RemoveHighlightedRenderers(List<Renderer> renderers)
+		{
+			for(int i = 0; i < renderersBuffer.Count; i++)
+			{
+				Renderer render = renderersBuffer[i];
 				if(render != null)
 				{
 					materialsBuffer.Clear();
@@ -377,27 +487,90 @@ namespace RuntimeGizmos
 						render.materials = materialsBuffer.ToArray();
 					}
 				}
+
+				highlightedRenderers.Remove(render);
 			}
-			highlightedRenderers.Clear();
+
+			renderersBuffer.Clear();
+		}
+
+		void AddTargetRoot(Transform targetRoot)
+		{
+			targetRoots.Add(targetRoot, new TargetInfo());
+			targetRootsOrdered.Add(targetRoot);
+
+			AddAllChildren(targetRoot);
+		}
+		void RemoveTargetRoot(Transform targetRoot)
+		{
+			targetRoots.Remove(targetRoot);
+			targetRootsOrdered.Remove(targetRoot);
+
+			RemoveAllChildren(targetRoot);
+		}
+
+		void AddAllChildren(Transform target)
+		{
+			childrenBuffer.Clear();
+			target.GetComponentsInChildren<Transform>(true, childrenBuffer);
+
+			for(int i = 0; i < childrenBuffer.Count; i++)
+			{
+				children.Add(childrenBuffer[i]);
+			}
+			childrenBuffer.Clear();
+		}
+		void RemoveAllChildren(Transform target)
+		{
+			childrenBuffer.Clear();
+			target.GetComponentsInChildren<Transform>(true, childrenBuffer);
+
+			for(int i = 0; i < childrenBuffer.Count; i++)
+			{
+				children.Remove(childrenBuffer[i]);
+			}
+			childrenBuffer.Clear();
 		}
 
 		void SetPivotPoint()
 		{
-			if(target != null)
+			if(mainTargetRoot != null)
 			{
 				if(pivot == TransformPivot.Pivot)
 				{
-					pivotPoint = target.position;
+					pivotPoint = mainTargetRoot.position;
 				}
 				else if(pivot == TransformPivot.Center)
 				{
-					pivotPoint = target.GetCenter(centerType);
+					totalCenterPivotPoint = Vector3.zero;
+
+					Dictionary<Transform, TargetInfo>.Enumerator targetsEnumerator = targetRoots.GetEnumerator(); //We avoid foreach to avoid garbage.
+					while(targetsEnumerator.MoveNext())
+					{
+						Transform target = targetsEnumerator.Current.Key;
+						TargetInfo info = targetsEnumerator.Current.Value;
+						info.centerPivotPoint = target.GetCenter(centerType);
+
+						totalCenterPivotPoint += info.centerPivotPoint;
+					}
+
+					totalCenterPivotPoint /= targetRoots.Count;
+
+					if(centerType == CenterType.Solo)
+					{
+						pivotPoint = targetRoots[mainTargetRoot].centerPivotPoint;
+					}
+					else if(centerType == CenterType.All)
+					{
+						pivotPoint = totalCenterPivotPoint;
+					}
 				}
 			}
 		}
 		void SetPivotPointOffset(Vector3 offset)
 		{
 			pivotPoint += offset;
+			totalCenterPivotPoint += offset;
 		}
 
 		AxisVectors axisVectorsBuffer = new AxisVectors();
@@ -407,7 +580,7 @@ namespace RuntimeGizmos
 
 			nearAxis = Axis.None;
 
-			if(target == null) return;
+			if(mainTargetRoot == null) return;
 
 			float distanceMultiplier = GetDistanceMultiplier();
 			float handleMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + handleWidth) * distanceMultiplier;
@@ -452,7 +625,7 @@ namespace RuntimeGizmos
 			else if(xClosestDistance <= minSelectedDistanceCheck && xClosestDistance <= yClosestDistance && xClosestDistance <= zClosestDistance) nearAxis = Axis.X;
 			else if(yClosestDistance <= minSelectedDistanceCheck && yClosestDistance <= xClosestDistance && yClosestDistance <= zClosestDistance) nearAxis = Axis.Y;
 			else if(zClosestDistance <= minSelectedDistanceCheck && zClosestDistance <= xClosestDistance && zClosestDistance <= yClosestDistance) nearAxis = Axis.Z;
-			else if(type == TransformType.Rotate && target != null)
+			else if(type == TransformType.Rotate && mainTargetRoot != null)
 			{
 				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
 				Vector3 mousePlaneHit = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, pivotPoint, (transform.position - pivotPoint).normalized);
@@ -479,22 +652,25 @@ namespace RuntimeGizmos
 
 		void SetAxisInfo()
 		{
-			float size = handleLength * GetDistanceMultiplier();
-			axisInfo.Set(target, pivotPoint, size, space);
-
-			if(isTransforming && type == TransformType.Scale)
+			if(mainTargetRoot != null)
 			{
-				if(nearAxis == Axis.Any) axisInfo.Set(target, pivotPoint, size + totalScaleAmount, space);
-				if(nearAxis == Axis.X) axisInfo.xAxisEnd += (axisInfo.xDirection * totalScaleAmount);
-				if(nearAxis == Axis.Y) axisInfo.yAxisEnd += (axisInfo.yDirection * totalScaleAmount);
-				if(nearAxis == Axis.Z) axisInfo.zAxisEnd += (axisInfo.zDirection * totalScaleAmount);
+				float size = handleLength * GetDistanceMultiplier();
+				axisInfo.Set(mainTargetRoot, pivotPoint, size, space);
+
+				if(isTransforming && type == TransformType.Scale)
+				{
+					if(nearAxis == Axis.Any) axisInfo.Set(mainTargetRoot, pivotPoint, size + totalScaleAmount, space);
+					if(nearAxis == Axis.X) axisInfo.xAxisEnd += (axisInfo.xDirection * totalScaleAmount);
+					if(nearAxis == Axis.Y) axisInfo.yAxisEnd += (axisInfo.yDirection * totalScaleAmount);
+					if(nearAxis == Axis.Z) axisInfo.zAxisEnd += (axisInfo.zDirection * totalScaleAmount);
+				}
 			}
 		}
 
 		//This helps keep the size consistent no matter how far we are from it.
 		float GetDistanceMultiplier()
 		{
-			if(target == null) return 0f;
+			if(mainTargetRoot == null) return 0f;
 			return Mathf.Max(.01f, Mathf.Abs(ExtVector3.MagnitudeInDirection(pivotPoint - transform.position, myCamera.transform.forward)));
 		}
 
@@ -753,19 +929,20 @@ namespace RuntimeGizmos
 
 #if UNITY_EDITOR
 		//This is mainly so if you move the object in the scene editor, the handles will be updated and drawn correctly. Not important at runtime.
+		//This seemd to work fine with a single target, but now that we can select multiple targets, I dont think it will help much.
 		Vector3 prevTargetPosition;
 		Transform prevTarget;
 		void UpdatePivotPoint()
 		{
-			if(target != null && !isTransforming)
+			if(mainTargetRoot != null && !isTransforming)
 			{
-				if(target.position != prevTargetPosition && prevTarget == target)
+				if(mainTargetRoot.position != prevTargetPosition && prevTarget == mainTargetRoot)
 				{
-					SetPivotPointOffset(target.position - prevTargetPosition);
+					SetPivotPointOffset(mainTargetRoot.position - prevTargetPosition);
 				}
 
-				prevTargetPosition = target.position;
-				prevTarget = target;
+				prevTargetPosition = mainTargetRoot.position;
+				prevTarget = mainTargetRoot;
 			}else{
 				prevTargetPosition = Vector3.zero;
 				prevTarget = null;
