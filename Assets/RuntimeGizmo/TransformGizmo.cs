@@ -58,7 +58,6 @@ namespace RuntimeGizmos
 
 		static Material lineMaterial;
 		static Material outlineMaterial;
-		static string outlineMaterialName = "TransformGizmoOutlineMaterial";
 
 		void Awake()
 		{
