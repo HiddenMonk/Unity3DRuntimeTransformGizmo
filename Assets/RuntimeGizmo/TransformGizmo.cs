@@ -29,7 +29,7 @@ namespace RuntimeGizmos
 		public KeyCode SetScaleTypeToggle = KeyCode.S;
 		public KeyCode AddSelection = KeyCode.LeftShift;
 		public KeyCode RemoveSelection = KeyCode.LeftControl;
-		public KeyCode ActionKey = KeyCode.LeftControl;
+		public KeyCode ActionKey = KeyCode.LeftShift; //Its set to shift instead of control so that while in the editor we dont accidentally undo editor changes =/
 		public KeyCode UndoAction = KeyCode.Z;
 		public KeyCode RedoAction = KeyCode.Y;
 
