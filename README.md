@@ -42,3 +42,6 @@ but for now we only look at the Renderer.bounds.center, so expect some differenc
 
 Also Added the ability to select multiple objects =)
 
+Added a UndoRedo system.
+By default the keys to Undo is Shift+Z and Redo is Shift+Y
+We use Shift instead of Control so that while in the editor we dont accidentally undo editor changes (for some reason unity doesnt seem to give us the option to disable editor hotkeys while in play mode? https://issuetracker.unity3d.com/issues/disable-editor-keyboard-shortcuts-while-playing)

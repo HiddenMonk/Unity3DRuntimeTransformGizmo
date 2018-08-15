@@ -2,11 +2,12 @@ using System;
 using UnityEngine;
 using System.Collections.Generic;
 using System.Collections;
+using CommandUndoRedo;
 
 namespace RuntimeGizmos
 {
 	//To be safe, if you are changing any transforms hierarchy, such as parenting an object to something,
-	//you should call ClearTargets before doing so just to be sure nothing unexpected happens...
+	//you should call ClearTargets before doing so just to be sure nothing unexpected happens... as well as call UndoRedoManager.Clear()
 	//For example, if you select an object that has children, move the children elsewhere, deselect the original object, then try to add those old children to the selection, I think it wont work.
 
 	[RequireComponent(typeof(Camera))]
@@ -28,6 +29,9 @@ namespace RuntimeGizmos
 		public KeyCode SetScaleTypeToggle = KeyCode.S;
 		public KeyCode AddSelection = KeyCode.LeftShift;
 		public KeyCode RemoveSelection = KeyCode.LeftControl;
+		public KeyCode ActionKey = KeyCode.LeftShift; //Its set to shift instead of control so that while in the editor we dont accidentally undo editor changes =/
+		public KeyCode UndoAction = KeyCode.Z;
+		public KeyCode RedoAction = KeyCode.Y;
 
 		public Color xColor = new Color(1, 0, 0, 0.8f);
 		public Color yColor = new Color(0, 1, 0, 0.8f);
@@ -48,6 +52,8 @@ namespace RuntimeGizmos
 		public float scaleSpeedMultiplier = 1f;
 		public float rotateSpeedMultiplier = 200f;
 		public float allRotateSpeedMultiplier = 20f;
+
+		public int maxUndoStored = 100;
 
 		AxisVectors handleLines = new AxisVectors();
 		AxisVectors handleTriangles = new AxisVectors();
@@ -98,6 +104,8 @@ namespace RuntimeGizmos
 
 		void Update()
 		{
+			HandleUndoRedo();
+
 			SetSpaceAndType();
 			SetNearAxis();
 			GetTarget();
@@ -164,8 +172,27 @@ namespace RuntimeGizmos
 			DrawQuads(rotationAxisVector.z, zColor);
 		}
 
+		void HandleUndoRedo()
+		{
+			if(maxUndoStored != UndoRedoManager.maxUndoStored) { UndoRedoManager.maxUndoStored = maxUndoStored; }
+
+			if(Input.GetKey(ActionKey))
+			{
+				if(Input.GetKeyDown(UndoAction))
+				{
+					UndoRedoManager.Undo();
+				}
+				else if(Input.GetKeyDown(RedoAction))
+				{
+					UndoRedoManager.Redo();
+				}
+			}
+		}
+
 		void SetSpaceAndType()
 		{
+			if(Input.GetKey(ActionKey)) return;
+
 			if(Input.GetKeyDown(SetMoveType)) type = TransformType.Move;
 			else if(Input.GetKeyDown(SetRotateType)) type = TransformType.Rotate;
 			else if(Input.GetKeyDown(SetScaleType)) type = TransformType.Scale;
@@ -228,6 +255,12 @@ namespace RuntimeGizmos
 			Vector3 axis = GetNearAxisDirection();
 			Vector3 projectedAxis = Vector3.ProjectOnPlane(axis, planeNormal).normalized;
 			Vector3 previousMousePosition = Vector3.zero;
+
+			List<ICommand> transformCommands = new List<ICommand>();
+			for(int i = 0; i < targetRootsOrdered.Count; i++)
+			{
+				transformCommands.Add(new TransformCommand(this, targetRootsOrdered[i]));
+			}
 
 			while(!Input.GetMouseButtonUp(0))
 			{
@@ -325,6 +358,14 @@ namespace RuntimeGizmos
 				yield return null;
 			}
 
+			for(int i = 0; i < transformCommands.Count; i++)
+			{
+				((TransformCommand)transformCommands[i]).StoreNewTransformValues();
+			}
+			CommandGroup commandGroup = new CommandGroup();
+			commandGroup.Set(transformCommands);
+			UndoRedoManager.Insert(commandGroup);
+
 			totalRotationAmount = Quaternion.identity;
 			totalScaleAmount = 0;
 			isTransforming = false;
@@ -366,8 +407,7 @@ namespace RuntimeGizmos
 					}
 					else if(!isAdding && !isRemoving)
 					{
-						ClearTargets();
-						AddTarget(target);
+						ClearAndAddTarget(target);
 					}
 				}else{
 					if(!isAdding && !isRemoving)
@@ -378,12 +418,14 @@ namespace RuntimeGizmos
 			}
 		}
 
-		void AddTarget(Transform target)
+		public void AddTarget(Transform target, bool addCommand = true)
 		{
 			if(target != null)
 			{
 				if(targetRoots.ContainsKey(target)) return;
 				if(children.Contains(target)) return;
+
+				if(addCommand) UndoRedoManager.Insert(new AddTargetCommand(this, target, targetRootsOrdered));
 
 				AddTargetRoot(target);
 				AddTargetHighlightedRenderers(target);
@@ -392,11 +434,13 @@ namespace RuntimeGizmos
 			}
 		}
 
-		void RemoveTarget(Transform target)
+		public void RemoveTarget(Transform target, bool addCommand = true)
 		{
 			if(target != null)
 			{
 				if(!targetRoots.ContainsKey(target)) return;
+
+				if(addCommand) UndoRedoManager.Insert(new RemoveTargetCommand(this, target));
 
 				RemoveTargetHighlightedRenderers(target);
 				RemoveTargetRoot(target);
@@ -405,12 +449,22 @@ namespace RuntimeGizmos
 			}
 		}
 
-		public void ClearTargets()
+		public void ClearTargets(bool addCommand = true)
 		{
+			if(addCommand) UndoRedoManager.Insert(new ClearTargetsCommand(this, targetRootsOrdered));
+
 			ClearAllHighlightedRenderers();
 			targetRoots.Clear();
 			targetRootsOrdered.Clear();
 			children.Clear();
+		}
+
+		void ClearAndAddTarget(Transform target)
+		{
+			UndoRedoManager.Insert(new ClearAndAddTargetCommand(this, target, targetRootsOrdered));
+
+			ClearTargets(false);
+			AddTarget(target, false);
 		}
 
 		void AddTargetHighlightedRenderers(Transform target)
@@ -540,7 +594,7 @@ namespace RuntimeGizmos
 			childrenBuffer.Clear();
 		}
 
-		void SetPivotPoint()
+		public void SetPivotPoint()
 		{
 			if(mainTargetRoot != null)
 			{
@@ -946,7 +1000,7 @@ namespace RuntimeGizmos
 			{
 				if(mainTargetRoot.position != prevTargetPosition && prevTarget == mainTargetRoot)
 				{
-					SetPivotPointOffset(mainTargetRoot.position - prevTargetPosition);
+					SetPivotPoint();
 				}
 
 				prevTargetPosition = mainTargetRoot.position;
