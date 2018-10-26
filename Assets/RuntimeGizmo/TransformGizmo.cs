@@ -23,6 +23,7 @@ namespace RuntimeGizmos
 		public KeyCode SetMoveType = KeyCode.W;
 		public KeyCode SetRotateType = KeyCode.E;
 		public KeyCode SetScaleType = KeyCode.R;
+		public KeyCode SetRectToolType = KeyCode.T;
 		public KeyCode SetSpaceToggle = KeyCode.X;
 		public KeyCode SetPivotModeToggle = KeyCode.Z;
 		public KeyCode SetCenterTypeToggle = KeyCode.C;
@@ -40,8 +41,6 @@ namespace RuntimeGizmos
 		public Color selectedColor = new Color(1, 1, 0, 0.8f);
 		public Color hoverColor = new Color(1, .75f, 0, 0.8f);
 
-		public bool useFirstSelectedAsMain = true;
-
 		public float handleLength = .25f;
 		public float handleWidth = .003f;
 		public float triangleSize = .03f;
@@ -52,6 +51,12 @@ namespace RuntimeGizmos
 		public float scaleSpeedMultiplier = 1f;
 		public float rotateSpeedMultiplier = 200f;
 		public float allRotateSpeedMultiplier = 20f;
+
+		public bool useFirstSelectedAsMain = true;
+
+		//Mainly for if you want the pivot point to update correctly if selected objects are moving outside the transformgizmo.
+		//Might be poor on performance if lots of objects are selected...
+		public bool forceUpdatePivotPointOnChange = true;
 
 		public int maxUndoStored = 100;
 
@@ -110,10 +115,6 @@ namespace RuntimeGizmos
 			SetNearAxis();
 			GetTarget();
 
-#if UNITY_EDITOR
-			UpdatePivotPoint();
-#endif
-
 			if(mainTargetRoot == null) return;
 			
 			TransformSelected();
@@ -126,6 +127,8 @@ namespace RuntimeGizmos
 			//We run this in lateupdate since coroutines run after update and we want our gizmos to have the updated target transform position after TransformSelected()
 			SetAxisInfo();
 			SetLines();
+
+			ForceUpdatePivotPointOnChange();
 		}
 
 		void OnPostRender()
@@ -635,6 +638,25 @@ namespace RuntimeGizmos
 			totalCenterPivotPoint += offset;
 		}
 
+		void ForceUpdatePivotPointOnChange()
+		{
+			if(forceUpdatePivotPointOnChange)
+			{
+				if(mainTargetRoot != null && !isTransforming)
+				{
+					Dictionary<Transform, TargetInfo>.Enumerator targets = targetRoots.GetEnumerator();
+					while(targets.MoveNext())
+					{
+						if(targets.Current.Value.previousPosition != Vector3.zero && targets.Current.Key.position != targets.Current.Value.previousPosition)
+						{
+							SetPivotPoint();
+						}
+						targets.Current.Value.previousPosition = targets.Current.Key.position;
+					}
+				}
+			}
+		}
+
 		AxisVectors axisVectorsBuffer = new AxisVectors();
 		void SetNearAxis()
 		{
@@ -734,10 +756,7 @@ namespace RuntimeGizmos
 		{
 			if(mainTargetRoot == null) return 0f;
 
-            if (Camera.main.orthographic)
-            {
-                return Mathf.Max(0.01f, Camera.main.orthographicSize * 2.0f);
-            }
+			if(myCamera.orthographic) return Mathf.Max(.01f, myCamera.orthographicSize * 2f);
 			return Mathf.Max(.01f, Mathf.Abs(ExtVector3.MagnitudeInDirection(pivotPoint - transform.position, myCamera.transform.forward)));
 		}
 
@@ -971,20 +990,6 @@ namespace RuntimeGizmos
 			GL.End();
 		}
 
-		void DrawCircles(List<Vector3> lines, Color color)
-		{
-			GL.Begin(GL.LINES);
-			GL.Color(color);
-
-			for(int i = 0; i < lines.Count; i += 2)
-			{
-				GL.Vertex(lines[i]);
-				GL.Vertex(lines[i + 1]);
-			}
-
-			GL.End();
-		}
-
 		void SetMaterial()
 		{
 			if(lineMaterial == null)
@@ -993,28 +998,5 @@ namespace RuntimeGizmos
 				outlineMaterial = new Material(Shader.Find("Custom/Outline"));
 			}
 		}
-
-#if UNITY_EDITOR
-		//This is mainly so if you move the object in the scene editor, the handles will be updated and drawn correctly. Not important at runtime.
-		//This seemd to work fine with a single target, but now that we can select multiple targets, I dont think it will help much.
-		Vector3 prevTargetPosition;
-		Transform prevTarget;
-		void UpdatePivotPoint()
-		{
-			if(mainTargetRoot != null && !isTransforming)
-			{
-				if(mainTargetRoot.position != prevTargetPosition && prevTarget == mainTargetRoot)
-				{
-					SetPivotPoint();
-				}
-
-				prevTargetPosition = mainTargetRoot.position;
-				prevTarget = mainTargetRoot;
-			}else{
-				prevTargetPosition = Vector3.zero;
-				prevTarget = null;
-			}
-		}
-#endif
 	}
 }
