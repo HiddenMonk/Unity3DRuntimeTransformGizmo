@@ -733,6 +733,11 @@ namespace RuntimeGizmos
 		float GetDistanceMultiplier()
 		{
 			if(mainTargetRoot == null) return 0f;
+
+            if (Camera.main.orthographic)
+            {
+                return Mathf.Max(0.01f, Camera.main.orthographicSize * 2.0f);
+            }
 			return Mathf.Max(.01f, Mathf.Abs(ExtVector3.MagnitudeInDirection(pivotPoint - transform.position, myCamera.transform.forward)));
 		}
 
