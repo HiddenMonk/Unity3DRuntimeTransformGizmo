@@ -86,6 +86,7 @@ namespace RuntimeGizmos
 		List<Material> materialsBuffer = new List<Material>();
 
 		Camera myCamera;
+		WaitForEndOfFrame waitForEndOFFrame = new WaitForEndOfFrame();
 
 		static Material lineMaterial;
 		static Material outlineMaterial;
@@ -94,6 +95,8 @@ namespace RuntimeGizmos
 		{
 			myCamera = GetComponent<Camera>();
 			SetMaterial();
+
+			StartCoroutine(ForceUpdatePivotPointAtEndOfFrame());
 		}
 
 		void OnDisable()
@@ -126,8 +129,6 @@ namespace RuntimeGizmos
 			//We run this in lateupdate since coroutines run after update and we want our gizmos to have the updated target transform position after TransformSelected()
 			SetAxisInfo();
 			SetLines();
-
-			ForceUpdatePivotPointOnChange();
 		}
 
 		void OnPostRender()
@@ -637,19 +638,35 @@ namespace RuntimeGizmos
 			totalCenterPivotPoint += offset;
 		}
 
+
+		IEnumerator ForceUpdatePivotPointAtEndOfFrame()
+		{
+			while(this.enabled)
+			{
+				ForceUpdatePivotPointOnChange();
+				yield return waitForEndOFFrame;
+			}
+		}
+
 		void ForceUpdatePivotPointOnChange()
 		{
 			if(forceUpdatePivotPointOnChange)
 			{
 				if(mainTargetRoot != null && !isTransforming)
 				{
+					bool hasSet = false;
 					Dictionary<Transform, TargetInfo>.Enumerator targets = targetRoots.GetEnumerator();
 					while(targets.MoveNext())
 					{
-						if(targets.Current.Value.previousPosition != Vector3.zero && targets.Current.Key.position != targets.Current.Value.previousPosition)
+						if(!hasSet)
 						{
-							SetPivotPoint();
+							if(targets.Current.Value.previousPosition != Vector3.zero && targets.Current.Key.position != targets.Current.Value.previousPosition)
+							{
+								SetPivotPoint();
+								hasSet = true;
+							}
 						}
+
 						targets.Current.Value.previousPosition = targets.Current.Key.position;
 					}
 				}
