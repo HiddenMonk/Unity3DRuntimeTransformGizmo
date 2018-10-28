@@ -87,6 +87,7 @@ namespace RuntimeGizmos
 
 		Camera myCamera;
 		WaitForEndOfFrame waitForEndOFFrame = new WaitForEndOfFrame();
+		Coroutine forceUpdatePivotCoroutine;
 
 		static Material lineMaterial;
 		static Material outlineMaterial;
@@ -95,13 +96,18 @@ namespace RuntimeGizmos
 		{
 			myCamera = GetComponent<Camera>();
 			SetMaterial();
+		}
 
-			StartCoroutine(ForceUpdatePivotPointAtEndOfFrame());
+		void OnEnable()
+		{
+			forceUpdatePivotCoroutine = StartCoroutine(ForceUpdatePivotPointAtEndOfFrame());
 		}
 
 		void OnDisable()
 		{
 			ClearTargets(); //Just so things gets cleaned up, such as removing any materials we placed on objects.
+
+			StopCoroutine(forceUpdatePivotCoroutine);
 		}
 
 		void OnDestroy()
