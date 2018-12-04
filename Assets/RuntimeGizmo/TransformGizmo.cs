@@ -48,7 +48,7 @@ namespace RuntimeGizmos
 		public float minSelectedDistanceCheck = .04f;
 		public float moveSpeedMultiplier = 1f;
 		public float scaleSpeedMultiplier = 1f;
-		public float rotateSpeedMultiplier = 200f;
+		public float rotateSpeedMultiplier = 1f;
 		public float allRotateSpeedMultiplier = 20f;
 
 		public bool useFirstSelectedAsMain = true;
@@ -371,10 +371,10 @@ namespace RuntimeGizmos
 							if(circularRotationMethod)
 							{
 								float angle = Vector3.SignedAngle(previousMousePosition - originalPivot, mousePosition - originalPivot, axis);
-								rotateAmount = (angle * rotateSpeedMultiplier) / GetDistanceMultiplier();
+								rotateAmount = angle * rotateSpeedMultiplier;
 							}else{
 								Vector3 projected = (nearAxis == Axis.Any || ExtVector3.IsParallel(axis, planeNormal)) ? planeNormal : Vector3.Cross(axis, planeNormal);
-								rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
+								rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * (rotateSpeedMultiplier * 100f)) / GetDistanceMultiplier();
 							}
 						}
 
