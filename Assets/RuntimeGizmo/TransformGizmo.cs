@@ -53,29 +53,45 @@ namespace RuntimeGizmos
 
 		public bool useFirstSelectedAsMain = true;
 
+		//If circularRotationMethod is true, when rotating you will need to move your mouse around the object as if turning a wheel.
+		//If circularRotationMethod is false, when rotating you can just click and drag in a line to rotate.
+		public bool circularRotationMethod;
+
 		//Mainly for if you want the pivot point to update correctly if selected objects are moving outside the transformgizmo.
 		//Might be poor on performance if lots of objects are selected...
 		public bool forceUpdatePivotPointOnChange = true;
 
 		public int maxUndoStored = 100;
 
+		public bool manuallyHandleGizmo;
+
+		public LayerMask selectionMask = Physics.DefaultRaycastLayers;
+
+		public Action onCheckForSelectedAxis;
+		public Action onDrawCustomGizmo;
+
+		public Camera myCamera {get; private set;}
+
+		public bool isTransforming {get; private set;}
+		public float totalScaleAmount {get; private set;}
+		public Quaternion totalRotationAmount {get; private set;}
+		public Axis translatingAxis {get {return nearAxis;}}
+
+		public Vector3 pivotPoint {get; private set;}
+		Vector3 totalCenterPivotPoint;
+
+		public Transform mainTargetRoot {get {return (targetRootsOrdered.Count > 0) ? (useFirstSelectedAsMain) ? targetRootsOrdered[0] : targetRootsOrdered[targetRootsOrdered.Count - 1] : null;}}
+
+		AxisInfo axisInfo;
+		Axis nearAxis = Axis.None;
+
 		AxisVectors handleLines = new AxisVectors();
 		AxisVectors handleTriangles = new AxisVectors();
 		AxisVectors handleSquares = new AxisVectors();
 		AxisVectors circlesLines = new AxisVectors();
 		AxisVectors drawCurrentCirclesLines = new AxisVectors();
-		
-		bool isTransforming;
-		float totalScaleAmount;
-		Quaternion totalRotationAmount;
-		Axis nearAxis = Axis.None;
-		AxisInfo axisInfo;
-
-		Vector3 pivotPoint;
-		Vector3 totalCenterPivotPoint;
 
 		//We use a HashSet and a List for targetRoots so that we get fast lookup with the hashset while also keeping track of the order with the list.
-		Transform mainTargetRoot {get {return (targetRootsOrdered.Count > 0) ? (useFirstSelectedAsMain) ? targetRootsOrdered[0] : targetRootsOrdered[targetRootsOrdered.Count - 1] : null;}}
 		List<Transform> targetRootsOrdered = new List<Transform>();
 		Dictionary<Transform, TargetInfo> targetRoots = new Dictionary<Transform, TargetInfo>();
 		HashSet<Renderer> highlightedRenderers = new HashSet<Renderer>();
@@ -85,7 +101,6 @@ namespace RuntimeGizmos
 		List<Renderer> renderersBuffer = new List<Renderer>();
 		List<Material> materialsBuffer = new List<Material>();
 
-		Camera myCamera;
 		WaitForEndOfFrame waitForEndOFFrame = new WaitForEndOfFrame();
 		Coroutine forceUpdatePivotCoroutine;
 
@@ -120,7 +135,14 @@ namespace RuntimeGizmos
 			HandleUndoRedo();
 
 			SetSpaceAndType();
-			SetNearAxis();
+
+			if(manuallyHandleGizmo)
+			{
+				if(onCheckForSelectedAxis != null) onCheckForSelectedAxis();
+			}else{
+				SetNearAxis();
+			}
+			
 			GetTarget();
 
 			if(mainTargetRoot == null) return;
@@ -134,12 +156,18 @@ namespace RuntimeGizmos
 
 			//We run this in lateupdate since coroutines run after update and we want our gizmos to have the updated target transform position after TransformSelected()
 			SetAxisInfo();
-			SetLines();
+			
+			if(manuallyHandleGizmo)
+			{
+				if(onDrawCustomGizmo != null) onDrawCustomGizmo();
+			}else{
+				SetLines();
+			}
 		}
 
 		void OnPostRender()
 		{
-			if(mainTargetRoot == null) return;
+			if(mainTargetRoot == null || manuallyHandleGizmo) return;
 
 			lineMaterial.SetPass(0);
 
@@ -340,8 +368,14 @@ namespace RuntimeGizmos
 							Quaternion.Euler(rotation).ToAngleAxis(out rotateAmount, out rotationAxis);
 							rotateAmount *= allRotateSpeedMultiplier;
 						}else{
-							Vector3 projected = (nearAxis == Axis.Any || ExtVector3.IsParallel(axis, planeNormal)) ? planeNormal : Vector3.Cross(axis, planeNormal);
-							rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
+							if(circularRotationMethod)
+							{
+								float angle = Vector3.SignedAngle(previousMousePosition - originalPivot, mousePosition - originalPivot, axis);
+								rotateAmount = (angle * rotateSpeedMultiplier) / GetDistanceMultiplier();
+							}else{
+								Vector3 projected = (nearAxis == Axis.Any || ExtVector3.IsParallel(axis, planeNormal)) ? planeNormal : Vector3.Cross(axis, planeNormal);
+								rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
+							}
 						}
 
 						for(int i = 0; i < targetRootsOrdered.Count; i++)
@@ -378,6 +412,7 @@ namespace RuntimeGizmos
 			totalRotationAmount = Quaternion.identity;
 			totalScaleAmount = 0;
 			isTransforming = false;
+			SetTranslatingAxis(Axis.None);
 
 			SetPivotPoint();
 		}
@@ -402,7 +437,7 @@ namespace RuntimeGizmos
 				bool isRemoving = Input.GetKey(RemoveSelection);
 
 				RaycastHit hitInfo; 
-				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo))
+				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo, Mathf.Infinity, selectionMask))
 				{
 					Transform target = hitInfo.transform;
 
@@ -679,12 +714,31 @@ namespace RuntimeGizmos
 			}
 		}
 
+		public void SetTranslatingAxis(Axis axis)
+		{
+			nearAxis = axis;
+		}
+
+		public AxisInfo GetAxisInfo()
+		{
+			AxisInfo currentAxisInfo = axisInfo;
+
+			if(isTransforming && space == TransformSpace.Global && type == TransformType.Rotate)
+			{
+				currentAxisInfo.xDirection = totalRotationAmount * Vector3.right;
+				currentAxisInfo.yDirection = totalRotationAmount * Vector3.up;
+				currentAxisInfo.zDirection = totalRotationAmount * Vector3.forward;
+			}
+
+			return currentAxisInfo;
+		}
+
 		AxisVectors axisVectorsBuffer = new AxisVectors();
 		void SetNearAxis()
 		{
 			if(isTransforming) return;
 
-			nearAxis = Axis.None;
+			SetTranslatingAxis(Axis.None);
 
 			if(mainTargetRoot == null) return;
 
@@ -727,15 +781,15 @@ namespace RuntimeGizmos
 			float zClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.z);
 			float allClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.all);
 
-			if(type == TransformType.Scale && allClosestDistance <= minSelectedDistanceCheck) nearAxis = Axis.Any;
-			else if(xClosestDistance <= minSelectedDistanceCheck && xClosestDistance <= yClosestDistance && xClosestDistance <= zClosestDistance) nearAxis = Axis.X;
-			else if(yClosestDistance <= minSelectedDistanceCheck && yClosestDistance <= xClosestDistance && yClosestDistance <= zClosestDistance) nearAxis = Axis.Y;
-			else if(zClosestDistance <= minSelectedDistanceCheck && zClosestDistance <= xClosestDistance && zClosestDistance <= yClosestDistance) nearAxis = Axis.Z;
+			if(type == TransformType.Scale && allClosestDistance <= minSelectedDistanceCheck) SetTranslatingAxis(Axis.Any);
+			else if(xClosestDistance <= minSelectedDistanceCheck && xClosestDistance <= yClosestDistance && xClosestDistance <= zClosestDistance) SetTranslatingAxis(Axis.X);
+			else if(yClosestDistance <= minSelectedDistanceCheck && yClosestDistance <= xClosestDistance && yClosestDistance <= zClosestDistance) SetTranslatingAxis(Axis.Y);
+			else if(zClosestDistance <= minSelectedDistanceCheck && zClosestDistance <= xClosestDistance && zClosestDistance <= yClosestDistance) SetTranslatingAxis(Axis.Z);
 			else if(type == TransformType.Rotate && mainTargetRoot != null)
 			{
 				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
 				Vector3 mousePlaneHit = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, pivotPoint, (transform.position - pivotPoint).normalized);
-				if((pivotPoint - mousePlaneHit).sqrMagnitude <= (handleLength * GetDistanceMultiplier()).Squared()) nearAxis = Axis.Any;
+				if((pivotPoint - mousePlaneHit).sqrMagnitude <= (handleLength * GetDistanceMultiplier()).Squared()) SetTranslatingAxis(Axis.Any);
 			}
 		}
 
@@ -774,7 +828,7 @@ namespace RuntimeGizmos
 		}
 
 		//This helps keep the size consistent no matter how far we are from it.
-		float GetDistanceMultiplier()
+		public float GetDistanceMultiplier()
 		{
 			if(mainTargetRoot == null) return 0f;
 
