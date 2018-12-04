@@ -13,7 +13,7 @@ namespace RuntimeGizmos
 		public CustomTransformGizmos customScaleGizmos = new CustomTransformGizmos();
 
 		public bool scaleBasedOnDistance = true;
-		public float scaleMultiplier = .1f;
+		public float scaleMultiplier = .4f;
 
 		public int gizmoLayer = 2; //2 is the ignoreRaycast layer. Set to whatever you want.
 
