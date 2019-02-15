@@ -14,7 +14,7 @@ namespace RuntimeGizmos
 	public class TransformGizmo : MonoBehaviour
 	{
 		public TransformSpace space = TransformSpace.Global;
-		public TransformType type = TransformType.Move;
+		public TransformType transformType = TransformType.Move;
 		public TransformPivot pivot = TransformPivot.Pivot;
 		public CenterType centerType = CenterType.All;
 		public ScaleType scaleType = ScaleType.FromPoint;
@@ -23,6 +23,8 @@ namespace RuntimeGizmos
 		public KeyCode SetMoveType = KeyCode.W;
 		public KeyCode SetRotateType = KeyCode.E;
 		public KeyCode SetScaleType = KeyCode.R;
+		//public KeyCode SetRectToolType = KeyCode.T;
+		public KeyCode SetAllTransformType = KeyCode.Y;
 		public KeyCode SetSpaceToggle = KeyCode.X;
 		public KeyCode SetPivotModeToggle = KeyCode.Z;
 		public KeyCode SetCenterTypeToggle = KeyCode.C;
@@ -39,19 +41,30 @@ namespace RuntimeGizmos
 		public Color allColor = new Color(.7f, .7f, .7f, 0.8f);
 		public Color selectedColor = new Color(1, 1, 0, 0.8f);
 		public Color hoverColor = new Color(1, .75f, 0, 0.8f);
+		//public Color rectPivotColor = new Color(0, 0, 1, 0.8f);
+		//public Color rectCornerColor = new Color(0, 0, 1, 0.8f);
+		//public Color rectAnchorColor = new Color(.7f, .7f, .7f, 0.8f);
+		//public Color rectLineColor = new Color(.7f, .7f, .7f, 0.8f);
 
 		public float handleLength = .25f;
 		public float handleWidth = .003f;
 		public float triangleSize = .03f;
 		public float boxSize = .03f;
 		public int circleDetail = 40;
+		public float allMoveHandleLengthMultiplier = 1f;
+		public float allRotateHandleLengthMultiplier = 1.4f;
+		public float allScaleHandleLengthMultiplier = 1.6f;
 		public float minSelectedDistanceCheck = .04f;
 		public float moveSpeedMultiplier = 1f;
 		public float scaleSpeedMultiplier = 1f;
-		public float rotateSpeedMultiplier = 200f;
+		public float rotateSpeedMultiplier = 1f;
 		public float allRotateSpeedMultiplier = 20f;
 
 		public bool useFirstSelectedAsMain = true;
+
+		//If circularRotationMethod is true, when rotating you will need to move your mouse around the object as if turning a wheel.
+		//If circularRotationMethod is false, when rotating you can just click and drag in a line to rotate.
+		public bool circularRotationMethod;
 
 		//Mainly for if you want the pivot point to update correctly if selected objects are moving outside the transformgizmo.
 		//Might be poor on performance if lots of objects are selected...
@@ -59,23 +72,36 @@ namespace RuntimeGizmos
 
 		public int maxUndoStored = 100;
 
+		public bool manuallyHandleGizmo;
+
+		public LayerMask selectionMask = Physics.DefaultRaycastLayers;
+
+		public Action onCheckForSelectedAxis;
+		public Action onDrawCustomGizmo;
+
+		public Camera myCamera {get; private set;}
+
+		public bool isTransforming {get; private set;}
+		public float totalScaleAmount {get; private set;}
+		public Quaternion totalRotationAmount {get; private set;}
+		public Axis translatingAxis {get {return nearAxis;}}
+		public TransformType transformingType {get {return translatingType;}}
+
+		public Vector3 pivotPoint {get; private set;}
+		Vector3 totalCenterPivotPoint;
+
+		public Transform mainTargetRoot {get {return (targetRootsOrdered.Count > 0) ? (useFirstSelectedAsMain) ? targetRootsOrdered[0] : targetRootsOrdered[targetRootsOrdered.Count - 1] : null;}}
+
+		AxisInfo axisInfo;
+		Axis nearAxis = Axis.None;
+		TransformType translatingType;
+
 		AxisVectors handleLines = new AxisVectors();
 		AxisVectors handleTriangles = new AxisVectors();
 		AxisVectors handleSquares = new AxisVectors();
 		AxisVectors circlesLines = new AxisVectors();
-		AxisVectors drawCurrentCirclesLines = new AxisVectors();
-		
-		bool isTransforming;
-		float totalScaleAmount;
-		Quaternion totalRotationAmount;
-		Axis nearAxis = Axis.None;
-		AxisInfo axisInfo;
-
-		Vector3 pivotPoint;
-		Vector3 totalCenterPivotPoint;
 
 		//We use a HashSet and a List for targetRoots so that we get fast lookup with the hashset while also keeping track of the order with the list.
-		Transform mainTargetRoot {get {return (targetRootsOrdered.Count > 0) ? (useFirstSelectedAsMain) ? targetRootsOrdered[0] : targetRootsOrdered[targetRootsOrdered.Count - 1] : null;}}
 		List<Transform> targetRootsOrdered = new List<Transform>();
 		Dictionary<Transform, TargetInfo> targetRoots = new Dictionary<Transform, TargetInfo>();
 		HashSet<Renderer> highlightedRenderers = new HashSet<Renderer>();
@@ -85,7 +111,6 @@ namespace RuntimeGizmos
 		List<Renderer> renderersBuffer = new List<Renderer>();
 		List<Material> materialsBuffer = new List<Material>();
 
-		Camera myCamera;
 		WaitForEndOfFrame waitForEndOFFrame = new WaitForEndOfFrame();
 		Coroutine forceUpdatePivotCoroutine;
 
@@ -120,7 +145,14 @@ namespace RuntimeGizmos
 			HandleUndoRedo();
 
 			SetSpaceAndType();
-			SetNearAxis();
+
+			if(manuallyHandleGizmo)
+			{
+				if(onCheckForSelectedAxis != null) onCheckForSelectedAxis();
+			}else{
+				SetNearAxis();
+			}
+			
 			GetTarget();
 
 			if(mainTargetRoot == null) return;
@@ -134,12 +166,18 @@ namespace RuntimeGizmos
 
 			//We run this in lateupdate since coroutines run after update and we want our gizmos to have the updated target transform position after TransformSelected()
 			SetAxisInfo();
-			SetLines();
+			
+			if(manuallyHandleGizmo)
+			{
+				if(onDrawCustomGizmo != null) onDrawCustomGizmo();
+			}else{
+				SetLines();
+			}
 		}
 
 		void OnPostRender()
 		{
-			if(mainTargetRoot == null) return;
+			if(mainTargetRoot == null || manuallyHandleGizmo) return;
 
 			lineMaterial.SetPass(0);
 
@@ -150,35 +188,29 @@ namespace RuntimeGizmos
 
 			//Note: The order of drawing the axis decides what gets drawn over what.
 
-			DrawQuads(handleLines.z, zColor);
-			DrawQuads(handleLines.x, xColor);
-			DrawQuads(handleLines.y, yColor);
+			DrawQuads(handleLines.z, GetColor(TransformType.Move, this.zColor, zColor));
+			DrawQuads(handleLines.x, GetColor(TransformType.Move, this.xColor, xColor));
+			DrawQuads(handleLines.y, GetColor(TransformType.Move, this.yColor, yColor));
 
-			DrawTriangles(handleTriangles.x, xColor);
-			DrawTriangles(handleTriangles.y, yColor);
-			DrawTriangles(handleTriangles.z, zColor);
+			DrawTriangles(handleTriangles.x, GetColor(TransformType.Move, this.xColor, xColor));
+			DrawTriangles(handleTriangles.y, GetColor(TransformType.Move, this.yColor, yColor));
+			DrawTriangles(handleTriangles.z, GetColor(TransformType.Move, this.zColor, zColor));
 
-			DrawQuads(handleSquares.x, xColor);
-			DrawQuads(handleSquares.y, yColor);
-			DrawQuads(handleSquares.z, zColor);
-			DrawQuads(handleSquares.all, allColor);
+			DrawQuads(handleSquares.x, GetColor(TransformType.Scale, this.xColor, xColor));
+			DrawQuads(handleSquares.y, GetColor(TransformType.Scale, this.yColor, yColor));
+			DrawQuads(handleSquares.z, GetColor(TransformType.Scale, this.zColor, zColor));
+			DrawQuads(handleSquares.all, GetColor(TransformType.Scale, this.allColor, allColor));
 
-			AxisVectors rotationAxisVector = circlesLines;
-			if(isTransforming && space == TransformSpace.Global && type == TransformType.Rotate)
-			{
-				rotationAxisVector = drawCurrentCirclesLines;
+			DrawQuads(circlesLines.all, GetColor(TransformType.Rotate, this.allColor, allColor));
+			DrawQuads(circlesLines.x, GetColor(TransformType.Rotate, this.xColor, xColor));
+			DrawQuads(circlesLines.y, GetColor(TransformType.Rotate, this.yColor, yColor));
+			DrawQuads(circlesLines.z, GetColor(TransformType.Rotate, this.zColor, zColor));
+		}
 
-				AxisInfo axisInfo = new AxisInfo();
-				axisInfo.xDirection = totalRotationAmount * Vector3.right;
-				axisInfo.yDirection = totalRotationAmount * Vector3.up;
-				axisInfo.zDirection = totalRotationAmount * Vector3.forward;
-				SetCircles(axisInfo, drawCurrentCirclesLines);
-			}
-
-			DrawQuads(rotationAxisVector.all, allColor);
-			DrawQuads(rotationAxisVector.x, xColor);
-			DrawQuads(rotationAxisVector.y, yColor);
-			DrawQuads(rotationAxisVector.z, zColor);
+		Color GetColor(TransformType type, Color normalColor, Color nearColor)
+		{
+			if(TranslatingTypeContains(type, false)) return nearColor;
+			return normalColor;
 		}
 
 		void HandleUndoRedo()
@@ -198,13 +230,48 @@ namespace RuntimeGizmos
 			}
 		}
 
+		public bool TransformTypeContains(TransformType type)
+		{
+			return TransformTypeContains(transformType, type);
+		}
+		public bool TranslatingTypeContains(TransformType type, bool checkIsTransforming = true)
+		{
+			TransformType transType = !checkIsTransforming || isTransforming ? translatingType : transformType;
+			return TransformTypeContains(transType, type);
+		}
+		public bool TransformTypeContains(TransformType mainType, TransformType type)
+		{
+			return ExtTransformType.TransformTypeContains(mainType, type, space);
+		}
+		
+		public float GetHandleLength(TransformType type, Axis axis = Axis.None, bool multiplyDistanceMultiplier = true)
+		{
+			float length = handleLength;
+			if(transformType == TransformType.All)
+			{
+				if(type == TransformType.Move) length *= allMoveHandleLengthMultiplier;
+				if(type == TransformType.Rotate) length *= allRotateHandleLengthMultiplier;
+				if(type == TransformType.Scale) length *= allScaleHandleLengthMultiplier;
+			}
+
+			if(multiplyDistanceMultiplier) length *= GetDistanceMultiplier();
+
+			if(type == TransformType.Scale && isTransforming && translatingAxis == axis) length += totalScaleAmount;
+
+			return length;
+		}
+
 		void SetSpaceAndType()
 		{
 			if(Input.GetKey(ActionKey)) return;
 
-			if(Input.GetKeyDown(SetMoveType)) type = TransformType.Move;
-			else if(Input.GetKeyDown(SetRotateType)) type = TransformType.Rotate;
-			else if(Input.GetKeyDown(SetScaleType)) type = TransformType.Scale;
+			if(Input.GetKeyDown(SetMoveType)) transformType = TransformType.Move;
+			else if(Input.GetKeyDown(SetRotateType)) transformType = TransformType.Rotate;
+			else if(Input.GetKeyDown(SetScaleType)) transformType = TransformType.Scale;
+			//else if(Input.GetKeyDown(SetRectToolType)) type = TransformType.RectTool;
+			else if(Input.GetKeyDown(SetAllTransformType)) transformType = TransformType.All;
+
+			if(!isTransforming) translatingType = transformType;
 
 			if(Input.GetKeyDown(SetPivotModeToggle))
 			{
@@ -234,7 +301,7 @@ namespace RuntimeGizmos
 				else if(scaleType == ScaleType.FromPointOffset) scaleType = ScaleType.FromPoint;
 			}
 
-			if(type == TransformType.Scale)
+			if(transformType == TransformType.Scale)
 			{
 				space = TransformSpace.Local; //Only support local scale
 				if(pivot == TransformPivot.Pivot) scaleType = ScaleType.FromPoint; //FromPointOffset can be inaccurate and should only really be used in Center mode if desired.
@@ -247,12 +314,12 @@ namespace RuntimeGizmos
 			{
 				if(nearAxis != Axis.None && Input.GetMouseButtonDown(0))
 				{
-					StartCoroutine(TransformSelected(type));
+					StartCoroutine(TransformSelected(translatingType));
 				}
 			}
 		}
 		
-		IEnumerator TransformSelected(TransformType type)
+		IEnumerator TransformSelected(TransformType transType)
 		{
 			isTransforming = true;
 			totalScaleAmount = 0;
@@ -278,7 +345,7 @@ namespace RuntimeGizmos
 
 				if(previousMousePosition != Vector3.zero && mousePosition != Vector3.zero)
 				{
-					if(type == TransformType.Move)
+					if(transType == TransformType.Move)
 					{
 						float moveAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projectedAxis) * moveSpeedMultiplier;
 						Vector3 movement = axis * moveAmount;
@@ -292,7 +359,7 @@ namespace RuntimeGizmos
 
 						SetPivotPointOffset(movement);
 					}
-					else if(type == TransformType.Scale)
+					else if(transType == TransformType.Scale)
 					{
 						Vector3 projected = (nearAxis == Axis.Any) ? transform.right : projectedAxis;
 						float scaleAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * scaleSpeedMultiplier;
@@ -329,7 +396,7 @@ namespace RuntimeGizmos
 
 						totalScaleAmount += scaleAmount;
 					}
-					else if(type == TransformType.Rotate)
+					else if(transType == TransformType.Rotate)
 					{
 						float rotateAmount = 0;
 						Vector3 rotationAxis = axis;
@@ -340,8 +407,14 @@ namespace RuntimeGizmos
 							Quaternion.Euler(rotation).ToAngleAxis(out rotateAmount, out rotationAxis);
 							rotateAmount *= allRotateSpeedMultiplier;
 						}else{
-							Vector3 projected = (nearAxis == Axis.Any || ExtVector3.IsParallel(axis, planeNormal)) ? planeNormal : Vector3.Cross(axis, planeNormal);
-							rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * rotateSpeedMultiplier) / GetDistanceMultiplier();
+							if(circularRotationMethod)
+							{
+								float angle = Vector3.SignedAngle(previousMousePosition - originalPivot, mousePosition - originalPivot, axis);
+								rotateAmount = angle * rotateSpeedMultiplier;
+							}else{
+								Vector3 projected = (nearAxis == Axis.Any || ExtVector3.IsParallel(axis, planeNormal)) ? planeNormal : Vector3.Cross(axis, planeNormal);
+								rotateAmount = (ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * (rotateSpeedMultiplier * 100f)) / GetDistanceMultiplier();
+							}
 						}
 
 						for(int i = 0; i < targetRootsOrdered.Count; i++)
@@ -378,6 +451,7 @@ namespace RuntimeGizmos
 			totalRotationAmount = Quaternion.identity;
 			totalScaleAmount = 0;
 			isTransforming = false;
+			SetTranslatingAxis(transformType, Axis.None);
 
 			SetPivotPoint();
 		}
@@ -402,7 +476,7 @@ namespace RuntimeGizmos
 				bool isRemoving = Input.GetKey(RemoveSelection);
 
 				RaycastHit hitInfo; 
-				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo))
+				if(Physics.Raycast(myCamera.ScreenPointToRay(Input.mousePosition), out hitInfo, Mathf.Infinity, selectionMask))
 				{
 					Transform target = hitInfo.transform;
 
@@ -679,63 +753,87 @@ namespace RuntimeGizmos
 			}
 		}
 
+		public void SetTranslatingAxis(TransformType type, Axis axis)
+		{
+			translatingType = type;
+			nearAxis = axis;
+		}
+
+		public AxisInfo GetAxisInfo()
+		{
+			AxisInfo currentAxisInfo = axisInfo;
+
+			if(isTransforming && space == TransformSpace.Global && translatingType == TransformType.Rotate)
+			{
+				currentAxisInfo.xDirection = totalRotationAmount * Vector3.right;
+				currentAxisInfo.yDirection = totalRotationAmount * Vector3.up;
+				currentAxisInfo.zDirection = totalRotationAmount * Vector3.forward;
+			}
+
+			return currentAxisInfo;
+		}
+
 		AxisVectors axisVectorsBuffer = new AxisVectors();
 		void SetNearAxis()
 		{
 			if(isTransforming) return;
 
-			nearAxis = Axis.None;
+			SetTranslatingAxis(transformType, Axis.None);
 
 			if(mainTargetRoot == null) return;
 
 			float distanceMultiplier = GetDistanceMultiplier();
 			float handleMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + handleWidth) * distanceMultiplier;
 
-			if(type == TransformType.Move || type == TransformType.Scale)
+			if(nearAxis == Axis.None && (TransformTypeContains(TransformType.Move) || TransformTypeContains(TransformType.Scale)))
 			{
 				float tipMinSelectedDistanceCheck = 0;
 				axisVectorsBuffer.Clear();
 				
-				if(type == TransformType.Move)
+				if(nearAxis == Axis.None && TransformTypeContains(TransformType.Move))
 				{
 					tipMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + triangleSize) * distanceMultiplier;
 					axisVectorsBuffer.Add(handleTriangles);
+					HandleNearest(TransformType.Move, axisVectorsBuffer, tipMinSelectedDistanceCheck);
 				}
-				else if(type == TransformType.Scale)
+
+				if(nearAxis == Axis.None && TransformTypeContains(TransformType.Scale))
 				{
 					tipMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + boxSize) * distanceMultiplier;
 					axisVectorsBuffer.Add(handleSquares);
+					HandleNearest(TransformType.Scale, axisVectorsBuffer, tipMinSelectedDistanceCheck);
 				}
-
-				HandleNearest(axisVectorsBuffer, tipMinSelectedDistanceCheck);
 
 				if(nearAxis == Axis.None)
 				{
-					HandleNearest(handleLines, handleMinSelectedDistanceCheck);
+					//Since Move and Scale share the same handle line, we give Move the priority.
+					TransformType transType = transformType == TransformType.All ? TransformType.Move : transformType;
+					HandleNearest(transType, handleLines, handleMinSelectedDistanceCheck);
 				}
 			}
-			else if(type == TransformType.Rotate)
+			
+			if(nearAxis == Axis.None && TransformTypeContains(TransformType.Rotate))
 			{
-				HandleNearest(circlesLines, handleMinSelectedDistanceCheck);
+				HandleNearest(TransformType.Rotate, circlesLines, handleMinSelectedDistanceCheck);
 			}
 		}
 
-		void HandleNearest(AxisVectors axisVectors, float minSelectedDistanceCheck)
+		void HandleNearest(TransformType type, AxisVectors axisVectors, float minSelectedDistanceCheck)
 		{
 			float xClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.x);
 			float yClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.y);
 			float zClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.z);
 			float allClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.all);
 
-			if(type == TransformType.Scale && allClosestDistance <= minSelectedDistanceCheck) nearAxis = Axis.Any;
-			else if(xClosestDistance <= minSelectedDistanceCheck && xClosestDistance <= yClosestDistance && xClosestDistance <= zClosestDistance) nearAxis = Axis.X;
-			else if(yClosestDistance <= minSelectedDistanceCheck && yClosestDistance <= xClosestDistance && yClosestDistance <= zClosestDistance) nearAxis = Axis.Y;
-			else if(zClosestDistance <= minSelectedDistanceCheck && zClosestDistance <= xClosestDistance && zClosestDistance <= yClosestDistance) nearAxis = Axis.Z;
+			if(type == TransformType.Scale && allClosestDistance <= minSelectedDistanceCheck) SetTranslatingAxis(type, Axis.Any);
+			else if(xClosestDistance <= minSelectedDistanceCheck && xClosestDistance <= yClosestDistance && xClosestDistance <= zClosestDistance) SetTranslatingAxis(type, Axis.X);
+			else if(yClosestDistance <= minSelectedDistanceCheck && yClosestDistance <= xClosestDistance && yClosestDistance <= zClosestDistance) SetTranslatingAxis(type, Axis.Y);
+			else if(zClosestDistance <= minSelectedDistanceCheck && zClosestDistance <= xClosestDistance && zClosestDistance <= yClosestDistance) SetTranslatingAxis(type, Axis.Z);
 			else if(type == TransformType.Rotate && mainTargetRoot != null)
 			{
 				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
 				Vector3 mousePlaneHit = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, pivotPoint, (transform.position - pivotPoint).normalized);
-				if((pivotPoint - mousePlaneHit).sqrMagnitude <= (handleLength * GetDistanceMultiplier()).Squared()) nearAxis = Axis.Any;
+				if((pivotPoint - mousePlaneHit).sqrMagnitude <= (GetHandleLength(TransformType.Rotate)).Squared()) SetTranslatingAxis(type, Axis.Any);
 			}
 		}
 
@@ -760,21 +858,12 @@ namespace RuntimeGizmos
 		{
 			if(mainTargetRoot != null)
 			{
-				float size = handleLength * GetDistanceMultiplier();
-				axisInfo.Set(mainTargetRoot, pivotPoint, size, space);
-
-				if(isTransforming && type == TransformType.Scale)
-				{
-					if(nearAxis == Axis.Any) axisInfo.Set(mainTargetRoot, pivotPoint, size + totalScaleAmount, space);
-					if(nearAxis == Axis.X) axisInfo.xAxisEnd += (axisInfo.xDirection * totalScaleAmount);
-					if(nearAxis == Axis.Y) axisInfo.yAxisEnd += (axisInfo.yDirection * totalScaleAmount);
-					if(nearAxis == Axis.Z) axisInfo.zAxisEnd += (axisInfo.zDirection * totalScaleAmount);
-				}
+				axisInfo.Set(mainTargetRoot, pivotPoint, space);
 			}
 		}
 
 		//This helps keep the size consistent no matter how far we are from it.
-		float GetDistanceMultiplier()
+		public float GetDistanceMultiplier()
 		{
 			if(mainTargetRoot == null) return 0f;
 
@@ -787,21 +876,30 @@ namespace RuntimeGizmos
 			SetHandleLines();
 			SetHandleTriangles();
 			SetHandleSquares();
-			SetCircles(axisInfo, circlesLines);
+			SetCircles(GetAxisInfo(), circlesLines);
 		}
 
 		void SetHandleLines()
 		{
 			handleLines.Clear();
 
-			if(type == TransformType.Move || type == TransformType.Scale)
+			if(TranslatingTypeContains(TransformType.Move) || TranslatingTypeContains(TransformType.Scale))
 			{
-				float distanceMultiplier = GetDistanceMultiplier();
-				float lineWidth = handleWidth * distanceMultiplier;
-				//When scaling, the axis will have different line lengths and direction.
-				float xLineLength = Vector3.Distance(pivotPoint, axisInfo.xAxisEnd) * AxisDirectionMultiplier(axisInfo.xAxisEnd - pivotPoint, axisInfo.xDirection);
-				float yLineLength = Vector3.Distance(pivotPoint, axisInfo.yAxisEnd) * AxisDirectionMultiplier(axisInfo.yAxisEnd - pivotPoint, axisInfo.yDirection);
-				float zLineLength = Vector3.Distance(pivotPoint, axisInfo.zAxisEnd) * AxisDirectionMultiplier(axisInfo.zAxisEnd - pivotPoint, axisInfo.zDirection);
+				float lineWidth = handleWidth * GetDistanceMultiplier();
+
+				float xLineLength = 0;
+				float yLineLength = 0;
+				float zLineLength = 0;
+				if(TranslatingTypeContains(TransformType.Move))
+				{
+					xLineLength = yLineLength = zLineLength = GetHandleLength(TransformType.Move);
+				}
+				else if(TranslatingTypeContains(TransformType.Scale))
+				{
+					xLineLength = GetHandleLength(TransformType.Scale, Axis.X);
+					yLineLength = GetHandleLength(TransformType.Scale, Axis.Y);
+					zLineLength = GetHandleLength(TransformType.Scale, Axis.Z);
+				}
 
 				AddQuads(pivotPoint, axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, xLineLength, lineWidth, handleLines.x);
 				AddQuads(pivotPoint, axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, yLineLength, lineWidth, handleLines.y);
@@ -817,12 +915,12 @@ namespace RuntimeGizmos
 		{
 			handleTriangles.Clear();
 
-			if(type == TransformType.Move)
+			if(TranslatingTypeContains(TransformType.Move))
 			{
 				float triangleLength = triangleSize * GetDistanceMultiplier();
-				AddTriangles(axisInfo.xAxisEnd, axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, triangleLength, handleTriangles.x);
-				AddTriangles(axisInfo.yAxisEnd, axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, triangleLength, handleTriangles.y);
-				AddTriangles(axisInfo.zAxisEnd, axisInfo.zDirection, axisInfo.yDirection, axisInfo.xDirection, triangleLength, handleTriangles.z);
+				AddTriangles(axisInfo.GetXAxisEnd(GetHandleLength(TransformType.Move)), axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, triangleLength, handleTriangles.x);
+				AddTriangles(axisInfo.GetYAxisEnd(GetHandleLength(TransformType.Move)), axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, triangleLength, handleTriangles.y);
+				AddTriangles(axisInfo.GetZAxisEnd(GetHandleLength(TransformType.Move)), axisInfo.zDirection, axisInfo.yDirection, axisInfo.xDirection, triangleLength, handleTriangles.z);
 			}
 		}
 
@@ -850,12 +948,12 @@ namespace RuntimeGizmos
 		{
 			handleSquares.Clear();
 
-			if(type == TransformType.Scale)
+			if(TranslatingTypeContains(TransformType.Scale))
 			{
 				float boxSize = this.boxSize * GetDistanceMultiplier();
-				AddSquares(axisInfo.xAxisEnd, axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, boxSize, handleSquares.x);
-				AddSquares(axisInfo.yAxisEnd, axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, boxSize, handleSquares.y);
-				AddSquares(axisInfo.zAxisEnd, axisInfo.zDirection, axisInfo.xDirection, axisInfo.yDirection, boxSize, handleSquares.z);
+				AddSquares(axisInfo.GetXAxisEnd(GetHandleLength(TransformType.Scale, Axis.X)), axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, boxSize, handleSquares.x);
+				AddSquares(axisInfo.GetYAxisEnd(GetHandleLength(TransformType.Scale, Axis.Y)), axisInfo.yDirection, axisInfo.xDirection, axisInfo.zDirection, boxSize, handleSquares.y);
+				AddSquares(axisInfo.GetZAxisEnd(GetHandleLength(TransformType.Scale, Axis.Z)), axisInfo.zDirection, axisInfo.xDirection, axisInfo.yDirection, boxSize, handleSquares.z);
 				AddSquares(pivotPoint - (axisInfo.xDirection * (boxSize * .5f)), axisInfo.xDirection, axisInfo.yDirection, axisInfo.zDirection, boxSize, handleSquares.all);
 			}
 		}
@@ -910,9 +1008,9 @@ namespace RuntimeGizmos
 		{
 			axisVectors.Clear();
 
-			if(type == TransformType.Rotate)
+			if(TranslatingTypeContains(TransformType.Rotate))
 			{
-				float circleLength = handleLength * GetDistanceMultiplier();
+				float circleLength = GetHandleLength(TransformType.Rotate);
 				AddCircle(pivotPoint, axisInfo.xDirection, circleLength, axisVectors.x);
 				AddCircle(pivotPoint, axisInfo.yDirection, circleLength, axisVectors.y);
 				AddCircle(pivotPoint, axisInfo.zDirection, circleLength, axisVectors.z);
@@ -1007,6 +1105,28 @@ namespace RuntimeGizmos
 				GL.Vertex(lines[i + 1]);
 				GL.Vertex(lines[i + 2]);
 				GL.Vertex(lines[i + 3]);
+			}
+
+			GL.End();
+		}
+
+		void DrawFilledCircle(List<Vector3> lines, Color color)
+		{
+			Vector3 center = Vector3.zero;
+			for(int i = 0; i < lines.Count; i++)
+			{
+				center += lines[i];
+			}
+			center /= lines.Count;
+
+			GL.Begin(GL.TRIANGLES);
+			GL.Color(color);
+
+			for(int i = 0; i + 1 < lines.Count; i++)
+			{
+				GL.Vertex(lines[i]);
+				GL.Vertex(lines[i + 1]);
+				GL.Vertex(center);
 			}
 
 			GL.End();
