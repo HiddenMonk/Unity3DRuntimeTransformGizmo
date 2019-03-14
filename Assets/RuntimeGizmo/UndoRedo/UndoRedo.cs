@@ -5,10 +5,10 @@ namespace CommandUndoRedo
 {
 	public class UndoRedo
 	{
-		public int maxUndoStored = int.MaxValue;
+		public int maxUndoStored {get {return undoCommands.maxLength;} set {SetMaxLength(value);}}
 
-		Stack<ICommand> undoCommands = new Stack<ICommand>();
-		Stack<ICommand> redoCommands = new Stack<ICommand>();
+		DropoutStack<ICommand> undoCommands = new DropoutStack<ICommand>();
+		DropoutStack<ICommand> redoCommands = new DropoutStack<ICommand>();
 
 		public UndoRedo() {}
 		public UndoRedo(int maxUndoStored)
@@ -44,11 +44,6 @@ namespace CommandUndoRedo
 
 		public void Insert(ICommand command)
 		{
-			if(undoCommands.Count > 0 && undoCommands.Count >= maxUndoStored)
-			{
-				undoCommands.Pop();
-			}
-
 			if(maxUndoStored <= 0) return;
 
 			undoCommands.Push(command);
@@ -59,6 +54,12 @@ namespace CommandUndoRedo
 		{
 			command.Execute();
 			Insert(command);
+		}
+
+		void SetMaxLength(int max)
+		{
+			undoCommands.maxLength = max;
+			redoCommands.maxLength = max;
 		}
 	}
 }
