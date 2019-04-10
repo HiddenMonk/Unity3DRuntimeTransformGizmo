@@ -41,6 +41,7 @@ namespace RuntimeGizmos
 		public Color allColor = new Color(.7f, .7f, .7f, 0.8f);
 		public Color selectedColor = new Color(1, 1, 0, 0.8f);
 		public Color hoverColor = new Color(1, .75f, 0, 0.8f);
+		public float planesOpacity = .5f;
 		//public Color rectPivotColor = new Color(0, 0, 1, 0.8f);
 		//public Color rectCornerColor = new Color(0, 0, 1, 0.8f);
 		//public Color rectAnchorColor = new Color(.7f, .7f, .7f, 0.8f);
@@ -48,13 +49,14 @@ namespace RuntimeGizmos
 
 		public float handleLength = .25f;
 		public float handleWidth = .003f;
+		public float planeSize = .035f;
 		public float triangleSize = .03f;
 		public float boxSize = .03f;
 		public int circleDetail = 40;
 		public float allMoveHandleLengthMultiplier = 1f;
 		public float allRotateHandleLengthMultiplier = 1.4f;
 		public float allScaleHandleLengthMultiplier = 1.6f;
-		public float minSelectedDistanceCheck = .04f;
+		public float minSelectedDistanceCheck = .01f;
 		public float moveSpeedMultiplier = 1f;
 		public float scaleSpeedMultiplier = 1f;
 		public float rotateSpeedMultiplier = 1f;
@@ -85,6 +87,8 @@ namespace RuntimeGizmos
 		public float totalScaleAmount {get; private set;}
 		public Quaternion totalRotationAmount {get; private set;}
 		public Axis translatingAxis {get {return nearAxis;}}
+		public Axis translatingAxisPlane {get {return planeAxis;}}
+		public bool hasTranslatingAxisPlane {get {return translatingAxisPlane != Axis.None && translatingAxisPlane != Axis.Any;}}
 		public TransformType transformingType {get {return translatingType;}}
 
 		public Vector3 pivotPoint {get; private set;}
@@ -94,9 +98,11 @@ namespace RuntimeGizmos
 
 		AxisInfo axisInfo;
 		Axis nearAxis = Axis.None;
+		Axis planeAxis = Axis.None;
 		TransformType translatingType;
 
 		AxisVectors handleLines = new AxisVectors();
+		AxisVectors handlePlanes = new AxisVectors();
 		AxisVectors handleTriangles = new AxisVectors();
 		AxisVectors handleSquares = new AxisVectors();
 		AxisVectors circlesLines = new AxisVectors();
@@ -188,13 +194,18 @@ namespace RuntimeGizmos
 
 			//Note: The order of drawing the axis decides what gets drawn over what.
 
-			DrawQuads(handleLines.z, GetColor(TransformType.Move, this.zColor, zColor));
-			DrawQuads(handleLines.x, GetColor(TransformType.Move, this.xColor, xColor));
-			DrawQuads(handleLines.y, GetColor(TransformType.Move, this.yColor, yColor));
+			TransformType moveOrScaleType = (transformType == TransformType.Scale || (isTransforming && translatingType == TransformType.Scale)) ? TransformType.Scale : TransformType.Move;
+			DrawQuads(handleLines.z, GetColor(moveOrScaleType, this.zColor, zColor, hasTranslatingAxisPlane));
+			DrawQuads(handleLines.x, GetColor(moveOrScaleType, this.xColor, xColor, hasTranslatingAxisPlane));
+			DrawQuads(handleLines.y, GetColor(moveOrScaleType, this.yColor, yColor, hasTranslatingAxisPlane));
 
-			DrawTriangles(handleTriangles.x, GetColor(TransformType.Move, this.xColor, xColor));
-			DrawTriangles(handleTriangles.y, GetColor(TransformType.Move, this.yColor, yColor));
-			DrawTriangles(handleTriangles.z, GetColor(TransformType.Move, this.zColor, zColor));
+			DrawTriangles(handleTriangles.x, GetColor(TransformType.Move, this.xColor, xColor, hasTranslatingAxisPlane));
+			DrawTriangles(handleTriangles.y, GetColor(TransformType.Move, this.yColor, yColor, hasTranslatingAxisPlane));
+			DrawTriangles(handleTriangles.z, GetColor(TransformType.Move, this.zColor, zColor, hasTranslatingAxisPlane));
+
+			DrawQuads(handlePlanes.z, GetColor(TransformType.Move, this.zColor, zColor, planesOpacity, !hasTranslatingAxisPlane));
+			DrawQuads(handlePlanes.x, GetColor(TransformType.Move, this.xColor, xColor, planesOpacity, !hasTranslatingAxisPlane));
+			DrawQuads(handlePlanes.y, GetColor(TransformType.Move, this.yColor, yColor, planesOpacity, !hasTranslatingAxisPlane));
 
 			DrawQuads(handleSquares.x, GetColor(TransformType.Scale, this.xColor, xColor));
 			DrawQuads(handleSquares.y, GetColor(TransformType.Scale, this.yColor, yColor));
@@ -207,10 +218,30 @@ namespace RuntimeGizmos
 			DrawQuads(circlesLines.z, GetColor(TransformType.Rotate, this.zColor, zColor));
 		}
 
-		Color GetColor(TransformType type, Color normalColor, Color nearColor)
+		Color GetColor(TransformType type, Color normalColor, Color nearColor, bool forceUseNormal = false)
 		{
-			if(TranslatingTypeContains(type, false)) return nearColor;
-			return normalColor;
+			return GetColor(type, normalColor, nearColor, false, 1, forceUseNormal);
+		}
+		Color GetColor(TransformType type, Color normalColor, Color nearColor, float alpha, bool forceUseNormal = false)
+		{
+			return GetColor(type, normalColor, nearColor, true, alpha, forceUseNormal);
+		}
+		Color GetColor(TransformType type, Color normalColor, Color nearColor, bool setAlpha, float alpha, bool forceUseNormal = false)
+		{
+			Color color;
+			if(!forceUseNormal && TranslatingTypeContains(type, false))
+			{
+				color = nearColor;
+			}else{
+				color = normalColor;
+			}
+
+			if(setAlpha)
+			{
+				color.a = alpha;
+			}
+
+			return color;
 		}
 
 		void HandleUndoRedo()
@@ -256,7 +287,7 @@ namespace RuntimeGizmos
 
 			if(multiplyDistanceMultiplier) length *= GetDistanceMultiplier();
 
-			if(type == TransformType.Scale && isTransforming && translatingAxis == axis) length += totalScaleAmount;
+			if(type == TransformType.Scale && isTransforming && (translatingAxis == axis || translatingAxis == Axis.Any)) length += totalScaleAmount;
 
 			return length;
 		}
@@ -327,8 +358,8 @@ namespace RuntimeGizmos
 
 			Vector3 originalPivot = pivotPoint;
 
-			Vector3 planeNormal = (transform.position - originalPivot).normalized;
 			Vector3 axis = GetNearAxisDirection();
+			Vector3 planeNormal = hasTranslatingAxisPlane ? axis : (transform.position - originalPivot).normalized;
 			Vector3 projectedAxis = Vector3.ProjectOnPlane(axis, planeNormal).normalized;
 			Vector3 previousMousePosition = Vector3.zero;
 
@@ -347,8 +378,15 @@ namespace RuntimeGizmos
 				{
 					if(transType == TransformType.Move)
 					{
-						float moveAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projectedAxis) * moveSpeedMultiplier;
-						Vector3 movement = axis * moveAmount;
+						Vector3 movement = Vector3.zero;
+
+						if(hasTranslatingAxisPlane)
+						{
+							movement = mousePosition - previousMousePosition;
+						}else{
+							float moveAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projectedAxis) * moveSpeedMultiplier;
+							movement = axis * moveAmount;
+						}
 
 						for(int i = 0; i < targetRootsOrdered.Count; i++)
 						{
@@ -753,10 +791,11 @@ namespace RuntimeGizmos
 			}
 		}
 
-		public void SetTranslatingAxis(TransformType type, Axis axis)
+		public void SetTranslatingAxis(TransformType type, Axis axis, Axis planeAxis = Axis.None)
 		{
-			translatingType = type;
-			nearAxis = axis;
+			this.translatingType = type;
+			this.nearAxis = axis;
+			this.planeAxis = planeAxis;
 		}
 
 		public AxisInfo GetAxisInfo()
@@ -773,7 +812,6 @@ namespace RuntimeGizmos
 			return currentAxisInfo;
 		}
 
-		AxisVectors axisVectorsBuffer = new AxisVectors();
 		void SetNearAxis()
 		{
 			if(isTransforming) return;
@@ -787,44 +825,66 @@ namespace RuntimeGizmos
 
 			if(nearAxis == Axis.None && (TransformTypeContains(TransformType.Move) || TransformTypeContains(TransformType.Scale)))
 			{
-				float tipMinSelectedDistanceCheck = 0;
-				axisVectorsBuffer.Clear();
-				
-				if(nearAxis == Axis.None && TransformTypeContains(TransformType.Move))
-				{
-					tipMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + triangleSize) * distanceMultiplier;
-					axisVectorsBuffer.Add(handleTriangles);
-					HandleNearest(TransformType.Move, axisVectorsBuffer, tipMinSelectedDistanceCheck);
-				}
-
+				//Important to check scale lines before move lines since in TransformType.All the move planes would block the scales center scale all gizmo.
 				if(nearAxis == Axis.None && TransformTypeContains(TransformType.Scale))
 				{
-					tipMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + boxSize) * distanceMultiplier;
-					axisVectorsBuffer.Add(handleSquares);
-					HandleNearest(TransformType.Scale, axisVectorsBuffer, tipMinSelectedDistanceCheck);
+					float tipMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + boxSize) * distanceMultiplier;
+					HandleNearestPlanes(TransformType.Scale, handleSquares, tipMinSelectedDistanceCheck);
+				}
+
+				if(nearAxis == Axis.None && TransformTypeContains(TransformType.Move))
+				{
+					//Important to check the planes first before the handle tip since it makes selecting the planes easier.
+					float planeMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + planeSize) * distanceMultiplier;
+					HandleNearestPlanes(TransformType.Move, handlePlanes, planeMinSelectedDistanceCheck);
+						
+					if(nearAxis != Axis.None)
+					{
+						planeAxis = nearAxis;
+					}
+					else
+					{
+						float tipMinSelectedDistanceCheck = (this.minSelectedDistanceCheck + triangleSize) * distanceMultiplier;
+						HandleNearestLines(TransformType.Move, handleTriangles, tipMinSelectedDistanceCheck);
+					}
 				}
 
 				if(nearAxis == Axis.None)
 				{
 					//Since Move and Scale share the same handle line, we give Move the priority.
 					TransformType transType = transformType == TransformType.All ? TransformType.Move : transformType;
-					HandleNearest(transType, handleLines, handleMinSelectedDistanceCheck);
+					HandleNearestLines(transType, handleLines, handleMinSelectedDistanceCheck);
 				}
 			}
 			
 			if(nearAxis == Axis.None && TransformTypeContains(TransformType.Rotate))
 			{
-				HandleNearest(TransformType.Rotate, circlesLines, handleMinSelectedDistanceCheck);
+				HandleNearestLines(TransformType.Rotate, circlesLines, handleMinSelectedDistanceCheck);
 			}
 		}
 
-		void HandleNearest(TransformType type, AxisVectors axisVectors, float minSelectedDistanceCheck)
+		void HandleNearestLines(TransformType type, AxisVectors axisVectors, float minSelectedDistanceCheck)
 		{
 			float xClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.x);
 			float yClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.y);
 			float zClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.z);
 			float allClosestDistance = ClosestDistanceFromMouseToLines(axisVectors.all);
 
+			HandleNearest(type, xClosestDistance, yClosestDistance, zClosestDistance, allClosestDistance, minSelectedDistanceCheck);
+		}
+
+		void HandleNearestPlanes(TransformType type, AxisVectors axisVectors, float minSelectedDistanceCheck)
+		{
+			float xClosestDistance = ClosestDistanceFromMouseToPlanes(axisVectors.x);
+			float yClosestDistance = ClosestDistanceFromMouseToPlanes(axisVectors.y);
+			float zClosestDistance = ClosestDistanceFromMouseToPlanes(axisVectors.z);
+			float allClosestDistance = ClosestDistanceFromMouseToPlanes(axisVectors.all);
+
+			HandleNearest(type, xClosestDistance, yClosestDistance, zClosestDistance, allClosestDistance, minSelectedDistanceCheck);
+		}
+
+		void HandleNearest(TransformType type, float xClosestDistance, float yClosestDistance, float zClosestDistance, float allClosestDistance, float minSelectedDistanceCheck)
+		{
 			if(type == TransformType.Scale && allClosestDistance <= minSelectedDistanceCheck) SetTranslatingAxis(type, Axis.Any);
 			else if(xClosestDistance <= minSelectedDistanceCheck && xClosestDistance <= yClosestDistance && xClosestDistance <= zClosestDistance) SetTranslatingAxis(type, Axis.X);
 			else if(yClosestDistance <= minSelectedDistanceCheck && yClosestDistance <= xClosestDistance && yClosestDistance <= zClosestDistance) SetTranslatingAxis(type, Axis.Y);
@@ -842,7 +902,7 @@ namespace RuntimeGizmos
 			Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
 
 			float closestDistance = float.MaxValue;
-			for(int i = 0; i < lines.Count; i += 2)
+			for(int i = 0; i + 1 < lines.Count; i++)
 			{
 				IntersectPoints points = Geometry.ClosestPointsOnSegmentToLine(lines[i], lines[i + 1], mouseRay.origin, mouseRay.direction);
 				float distance = Vector3.Distance(points.first, points.second);
@@ -853,6 +913,56 @@ namespace RuntimeGizmos
 			}
 			return closestDistance;
 		}
+
+		float ClosestDistanceFromMouseToPlanes(List<Vector3> planePoints)
+		{
+			float closestDistance = float.MaxValue;
+
+			if(planePoints.Count >= 4)
+			{
+				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
+
+				for(int i = 0; i < planePoints.Count; i += 4)
+				{
+					Plane plane = new Plane(planePoints[i], planePoints[i + 1], planePoints[i + 2]);
+
+					float distanceToPlane;
+					if(plane.Raycast(mouseRay, out distanceToPlane))
+					{
+						Vector3 pointOnPlane = mouseRay.origin + (mouseRay.direction * distanceToPlane);
+						Vector3 planeCenter = (planePoints[0] + planePoints[1] + planePoints[2] + planePoints[3]) / 4f;
+
+						float distance = Vector3.Distance(planeCenter, pointOnPlane);
+						if(distance < closestDistance)
+						{
+							closestDistance = distance;
+						}
+					}
+				}
+			}
+
+			return closestDistance;
+		}
+
+		//float DistanceFromMouseToPlane(List<Vector3> planeLines)
+		//{
+		//	if(planeLines.Count >= 4)
+		//	{
+		//		Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
+		//		Plane plane = new Plane(planeLines[0], planeLines[1], planeLines[2]);
+
+		//		float distanceToPlane;
+		//		if(plane.Raycast(mouseRay, out distanceToPlane))
+		//		{
+		//			Vector3 pointOnPlane = mouseRay.origin + (mouseRay.direction * distanceToPlane);
+		//			Vector3 planeCenter = (planeLines[0] + planeLines[1] + planeLines[2] + planeLines[3]) / 4f;
+
+		//			return Vector3.Distance(planeCenter, pointOnPlane);
+		//		}
+		//	}
+
+		//	return float.MaxValue;
+		//}
 
 		void SetAxisInfo()
 		{
@@ -874,6 +984,7 @@ namespace RuntimeGizmos
 		void SetLines()
 		{
 			SetHandleLines();
+			SetHandlePlanes();
 			SetHandleTriangles();
 			SetHandleSquares();
 			SetCircles(GetAxisInfo(), circlesLines);
@@ -909,6 +1020,35 @@ namespace RuntimeGizmos
 		int AxisDirectionMultiplier(Vector3 direction, Vector3 otherDirection)
 		{
 			return ExtVector3.IsInDirection(direction, otherDirection) ? 1 : -1;
+		}
+
+		void SetHandlePlanes()
+		{
+			handlePlanes.Clear();
+
+			if(TranslatingTypeContains(TransformType.Move))
+			{
+				Vector3 pivotToCamera = myCamera.transform.position - pivotPoint;
+				float cameraXSign = Mathf.Sign(Vector3.Dot(axisInfo.xDirection, pivotToCamera));
+				float cameraYSign = Mathf.Sign(Vector3.Dot(axisInfo.yDirection, pivotToCamera));
+				float cameraZSign = Mathf.Sign(Vector3.Dot(axisInfo.zDirection, pivotToCamera));
+
+				float planeSize = this.planeSize;
+				if(transformType == TransformType.All) { planeSize *= allMoveHandleLengthMultiplier; }
+				planeSize *= GetDistanceMultiplier();
+
+				Vector3 xDirection = (axisInfo.xDirection * planeSize) * cameraXSign;
+				Vector3 yDirection = (axisInfo.yDirection * planeSize) * cameraYSign;
+				Vector3 zDirection = (axisInfo.zDirection * planeSize) * cameraZSign;
+
+				Vector3 xPlaneCenter = pivotPoint + (yDirection + zDirection);
+				Vector3 yPlaneCenter = pivotPoint + (xDirection + zDirection);
+				Vector3 zPlaneCenter = pivotPoint + (xDirection + yDirection);
+
+				AddQuad(xPlaneCenter, axisInfo.yDirection, axisInfo.zDirection, planeSize, handlePlanes.x);
+				AddQuad(yPlaneCenter, axisInfo.xDirection, axisInfo.zDirection, planeSize, handlePlanes.y);
+				AddQuad(zPlaneCenter, axisInfo.xDirection, axisInfo.yDirection, planeSize, handlePlanes.z);
+			}
 		}
 
 		void SetHandleTriangles()
@@ -989,6 +1129,16 @@ namespace RuntimeGizmos
 				resultsBuffer.Add(baseRectangleEnd[i + 1]);
 				resultsBuffer.Add(baseRectangle[i + 1]);
 			}
+		}
+
+		void AddQuad(Vector3 axisStart, Vector3 axisOtherDirection1, Vector3 axisOtherDirection2, float width, List<Vector3> resultsBuffer)
+		{
+			Square baseRectangle = GetBaseSquare(axisStart, axisOtherDirection1, axisOtherDirection2, width);
+
+			resultsBuffer.Add(baseRectangle.bottomLeft);
+			resultsBuffer.Add(baseRectangle.topLeft);
+			resultsBuffer.Add(baseRectangle.topRight);
+			resultsBuffer.Add(baseRectangle.bottomRight);
 		}
 
 		Square GetBaseSquare(Vector3 axisEnd, Vector3 axisOtherDirection1, Vector3 axisOtherDirection2, float size)
