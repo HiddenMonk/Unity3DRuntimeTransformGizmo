@@ -261,6 +261,12 @@ namespace RuntimeGizmos
 			}
 		}
 
+		//We only support scaling in local space.
+		public TransformSpace GetProperTransformSpace()
+		{
+			return transformType == TransformType.Scale ? TransformSpace.Local : space;
+		}
+
 		public bool TransformTypeContains(TransformType type)
 		{
 			return TransformTypeContains(transformType, type);
@@ -272,7 +278,7 @@ namespace RuntimeGizmos
 		}
 		public bool TransformTypeContains(TransformType mainType, TransformType type)
 		{
-			return ExtTransformType.TransformTypeContains(mainType, type, space);
+			return ExtTransformType.TransformTypeContains(mainType, type, GetProperTransformSpace());
 		}
 		
 		public float GetHandleLength(TransformType type, Axis axis = Axis.None, bool multiplyDistanceMultiplier = true)
@@ -334,7 +340,6 @@ namespace RuntimeGizmos
 
 			if(transformType == TransformType.Scale)
 			{
-				space = TransformSpace.Local; //Only support local scale
 				if(pivot == TransformPivot.Pivot) scaleType = ScaleType.FromPoint; //FromPointOffset can be inaccurate and should only really be used in Center mode if desired.
 			}
 		}
@@ -403,7 +408,7 @@ namespace RuntimeGizmos
 						float scaleAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * scaleSpeedMultiplier;
 						
 						//WARNING - There is a bug in unity 5.4 and 5.5 that causes InverseTransformDirection to be affected by scale which will break negative scaling. Not tested, but updating to 5.4.2 should fix it - https://issuetracker.unity3d.com/issues/transformdirection-and-inversetransformdirection-operations-are-affected-by-scale
-						Vector3 localAxis = (space == TransformSpace.Local && nearAxis != Axis.Any) ? mainTargetRoot.InverseTransformDirection(axis) : axis;
+						Vector3 localAxis = (GetProperTransformSpace() == TransformSpace.Local && nearAxis != Axis.Any) ? mainTargetRoot.InverseTransformDirection(axis) : axis;
 						
 						Vector3 targetScaleAmount = Vector3.one;
 						if(nearAxis == Axis.Any) targetScaleAmount = (ExtVector3.Abs(mainTargetRoot.localScale.normalized) * scaleAmount);
@@ -802,7 +807,7 @@ namespace RuntimeGizmos
 		{
 			AxisInfo currentAxisInfo = axisInfo;
 
-			if(isTransforming && space == TransformSpace.Global && translatingType == TransformType.Rotate)
+			if(isTransforming && GetProperTransformSpace() == TransformSpace.Global && translatingType == TransformType.Rotate)
 			{
 				currentAxisInfo.xDirection = totalRotationAmount * Vector3.right;
 				currentAxisInfo.yDirection = totalRotationAmount * Vector3.up;
@@ -968,7 +973,7 @@ namespace RuntimeGizmos
 		{
 			if(mainTargetRoot != null)
 			{
-				axisInfo.Set(mainTargetRoot, pivotPoint, space);
+				axisInfo.Set(mainTargetRoot, pivotPoint, GetProperTransformSpace());
 			}
 		}
 
