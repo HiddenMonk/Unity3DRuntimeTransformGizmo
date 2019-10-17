@@ -1222,6 +1222,8 @@ namespace RuntimeGizmos
 
 		void DrawLines(List<Vector3> lines, Color color)
 		{
+			if(lines.Count == 0) return;
+		
 			GL.Begin(GL.LINES);
 			GL.Color(color);
 
@@ -1236,6 +1238,8 @@ namespace RuntimeGizmos
 
 		void DrawTriangles(List<Vector3> lines, Color color)
 		{
+			if(lines.Count == 0) return;
+		
 			GL.Begin(GL.TRIANGLES);
 			GL.Color(color);
 
@@ -1251,6 +1255,8 @@ namespace RuntimeGizmos
 
 		void DrawQuads(List<Vector3> lines, Color color)
 		{
+			if(lines.Count == 0) return;
+		
 			GL.Begin(GL.QUADS);
 			GL.Color(color);
 
@@ -1267,6 +1273,8 @@ namespace RuntimeGizmos
 
 		void DrawFilledCircle(List<Vector3> lines, Color color)
 		{
+			if(lines.Count == 0) return;
+		
 			Vector3 center = Vector3.zero;
 			for(int i = 0; i < lines.Count; i++)
 			{
