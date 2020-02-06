@@ -29,6 +29,7 @@ namespace RuntimeGizmos
 		public KeyCode SetPivotModeToggle = KeyCode.Z;
 		public KeyCode SetCenterTypeToggle = KeyCode.C;
 		public KeyCode SetScaleTypeToggle = KeyCode.S;
+		public KeyCode translationSnapping = KeyCode.LeftControl;
 		public KeyCode AddSelection = KeyCode.LeftShift;
 		public KeyCode RemoveSelection = KeyCode.LeftControl;
 		public KeyCode ActionKey = KeyCode.LeftShift; //Its set to shift instead of control so that while in the editor we dont accidentally undo editor changes =/
@@ -46,6 +47,10 @@ namespace RuntimeGizmos
 		//public Color rectCornerColor = new Color(0, 0, 1, 0.8f);
 		//public Color rectAnchorColor = new Color(.7f, .7f, .7f, 0.8f);
 		//public Color rectLineColor = new Color(.7f, .7f, .7f, 0.8f);
+
+		public float movementSnap = .25f;
+		public float rotationSnap = 15f;
+		public float scaleSnap = 1f;
 
 		public float handleLength = .25f;
 		public float handleWidth = .003f;
@@ -363,10 +368,15 @@ namespace RuntimeGizmos
 
 			Vector3 originalPivot = pivotPoint;
 
-			Vector3 axis = GetNearAxisDirection();
+			Vector3 otherAxis1, otherAxis2;
+			Vector3 axis = GetNearAxisDirection(out otherAxis1, out otherAxis2);
 			Vector3 planeNormal = hasTranslatingAxisPlane ? axis : (transform.position - originalPivot).normalized;
 			Vector3 projectedAxis = Vector3.ProjectOnPlane(axis, planeNormal).normalized;
 			Vector3 previousMousePosition = Vector3.zero;
+
+			Vector3 currentSnapMovementAmount = Vector3.zero;
+			float currentSnapRotationAmount = 0;
+			float currentSnapScaleAmount = 0;
 
 			List<ICommand> transformCommands = new List<ICommand>();
 			for(int i = 0; i < targetRootsOrdered.Count; i++)
@@ -378,6 +388,7 @@ namespace RuntimeGizmos
 			{
 				Ray mouseRay = myCamera.ScreenPointToRay(Input.mousePosition);
 				Vector3 mousePosition = Geometry.LinePlaneIntersect(mouseRay.origin, mouseRay.direction, originalPivot, planeNormal);
+				bool isSnapping = Input.GetKey(translationSnapping);
 
 				if(previousMousePosition != Vector3.zero && mousePosition != Vector3.zero)
 				{
@@ -391,6 +402,47 @@ namespace RuntimeGizmos
 						}else{
 							float moveAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projectedAxis) * moveSpeedMultiplier;
 							movement = axis * moveAmount;
+						}
+
+						if(isSnapping && movementSnap > 0)
+						{
+							currentSnapMovementAmount += movement;
+							movement = Vector3.zero;
+
+							if(hasTranslatingAxisPlane)
+							{
+								float amountInAxis1 = ExtVector3.MagnitudeInDirection(currentSnapMovementAmount, otherAxis1);
+								float amountInAxis2 = ExtVector3.MagnitudeInDirection(currentSnapMovementAmount, otherAxis2);
+
+								float remainder1;
+								float snapAmount1 = CalculateSnapAmount(movementSnap, amountInAxis1, out remainder1);
+								float remainder2;
+								float snapAmount2 = CalculateSnapAmount(movementSnap, amountInAxis2, out remainder2);
+
+								if(snapAmount1 != 0)
+								{
+									Vector3 snapMove = (otherAxis1 * snapAmount1);
+									movement += snapMove;
+									currentSnapMovementAmount -= snapMove;
+								}
+								if(snapAmount2 != 0)
+								{
+									Vector3 snapMove = (otherAxis2 * snapAmount2);
+									movement += snapMove;
+									currentSnapMovementAmount -= snapMove;
+								}
+							}
+							else
+							{
+								float remainder;
+								float snapAmount = CalculateSnapAmount(movementSnap, currentSnapMovementAmount.magnitude, out remainder);
+
+								if(snapAmount != 0)
+								{
+									movement = currentSnapMovementAmount.normalized * snapAmount;
+									currentSnapMovementAmount = currentSnapMovementAmount.normalized * remainder;
+								}
+							}
 						}
 
 						for(int i = 0; i < targetRootsOrdered.Count; i++)
@@ -407,6 +459,21 @@ namespace RuntimeGizmos
 						Vector3 projected = (nearAxis == Axis.Any) ? transform.right : projectedAxis;
 						float scaleAmount = ExtVector3.MagnitudeInDirection(mousePosition - previousMousePosition, projected) * scaleSpeedMultiplier;
 						
+						if(isSnapping && scaleSnap > 0)
+						{
+							currentSnapScaleAmount += scaleAmount;
+							scaleAmount = 0;
+
+							float remainder;
+							float snapAmount = CalculateSnapAmount(scaleSnap, currentSnapScaleAmount, out remainder);
+
+							if(snapAmount != 0)
+							{
+								scaleAmount = snapAmount;
+								currentSnapScaleAmount = remainder;
+							}
+						}
+
 						//WARNING - There is a bug in unity 5.4 and 5.5 that causes InverseTransformDirection to be affected by scale which will break negative scaling. Not tested, but updating to 5.4.2 should fix it - https://issuetracker.unity3d.com/issues/transformdirection-and-inversetransformdirection-operations-are-affected-by-scale
 						Vector3 localAxis = (GetProperTransformSpace() == TransformSpace.Local && nearAxis != Axis.Any) ? mainTargetRoot.InverseTransformDirection(axis) : axis;
 						
@@ -460,6 +527,21 @@ namespace RuntimeGizmos
 							}
 						}
 
+						if(isSnapping && rotationSnap > 0)
+						{
+							currentSnapRotationAmount += rotateAmount;
+							rotateAmount = 0;
+
+							float remainder;
+							float snapAmount = CalculateSnapAmount(rotationSnap, currentSnapRotationAmount, out remainder);
+
+							if(snapAmount != 0)
+							{
+								rotateAmount = snapAmount;
+								currentSnapRotationAmount = remainder;
+							}
+						}
+
 						for(int i = 0; i < targetRootsOrdered.Count; i++)
 						{
 							Transform target = targetRootsOrdered[i];
@@ -499,15 +581,51 @@ namespace RuntimeGizmos
 			SetPivotPoint();
 		}
 
-		Vector3 GetNearAxisDirection()
+		float CalculateSnapAmount(float snapValue, float currentAmount, out float remainder)
 		{
+			remainder = 0;
+			if(snapValue <= 0) return currentAmount;
+
+			float currentAmountAbs = Mathf.Abs(currentAmount);
+			if(currentAmountAbs > snapValue)
+			{
+				remainder = currentAmountAbs % snapValue;
+				return snapValue * (Mathf.Sign(currentAmount) * Mathf.Floor(currentAmountAbs / snapValue));
+			}
+
+			return 0;
+		}
+
+		Vector3 GetNearAxisDirection(out Vector3 otherAxis1, out Vector3 otherAxis2)
+		{
+			otherAxis1 = otherAxis2 = Vector3.zero;
+
 			if(nearAxis != Axis.None)
 			{
-				if(nearAxis == Axis.X) return axisInfo.xDirection;
-				if(nearAxis == Axis.Y) return axisInfo.yDirection;
-				if(nearAxis == Axis.Z) return axisInfo.zDirection;
-				if(nearAxis == Axis.Any) return Vector3.one;
+				if(nearAxis == Axis.X)
+				{
+					otherAxis1 = axisInfo.yDirection;
+					otherAxis2 = axisInfo.zDirection;
+					return axisInfo.xDirection;
+				}
+				if(nearAxis == Axis.Y)
+				{
+					otherAxis1 = axisInfo.xDirection;
+					otherAxis2 = axisInfo.zDirection;
+					return axisInfo.yDirection;
+				}
+				if(nearAxis == Axis.Z)
+				{
+					otherAxis1 = axisInfo.xDirection;
+					otherAxis2 = axisInfo.yDirection;
+					return axisInfo.zDirection;
+				}
+				if(nearAxis == Axis.Any)
+				{
+					return Vector3.one;
+				}
 			}
+
 			return Vector3.zero;
 		}
 	
@@ -1223,7 +1341,7 @@ namespace RuntimeGizmos
 		void DrawLines(List<Vector3> lines, Color color)
 		{
 			if(lines.Count == 0) return;
-		
+
 			GL.Begin(GL.LINES);
 			GL.Color(color);
 
@@ -1239,7 +1357,7 @@ namespace RuntimeGizmos
 		void DrawTriangles(List<Vector3> lines, Color color)
 		{
 			if(lines.Count == 0) return;
-		
+
 			GL.Begin(GL.TRIANGLES);
 			GL.Color(color);
 
@@ -1256,7 +1374,7 @@ namespace RuntimeGizmos
 		void DrawQuads(List<Vector3> lines, Color color)
 		{
 			if(lines.Count == 0) return;
-		
+
 			GL.Begin(GL.QUADS);
 			GL.Color(color);
 
@@ -1274,7 +1392,7 @@ namespace RuntimeGizmos
 		void DrawFilledCircle(List<Vector3> lines, Color color)
 		{
 			if(lines.Count == 0) return;
-		
+
 			Vector3 center = Vector3.zero;
 			for(int i = 0; i < lines.Count; i++)
 			{
