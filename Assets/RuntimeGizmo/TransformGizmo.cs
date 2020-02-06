@@ -855,7 +855,7 @@ namespace RuntimeGizmos
 					{
 						Transform target = targetsEnumerator.Current.Key;
 						TargetInfo info = targetsEnumerator.Current.Value;
-						info.centerPivotPoint = target.GetCenter(centerType == CenterType.All);
+						info.centerPivotPoint = target.GetCenter(centerType);
 
 						totalCenterPivotPoint += info.centerPivotPoint;
 					}
