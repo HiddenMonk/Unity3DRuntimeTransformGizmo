@@ -3,6 +3,8 @@ A runtime transform gizmo similar to unitys editor so you can translate (move, r
 
 Video demonstration - https://www.youtube.com/watch?v=IUQqhS8tsNo
 
+cyrilBoucher created a fork that works with Unitys PackageManager - https://github.com/cyrilBoucher/Unity3DRuntimeTransformGizmo/tree/feature/upm-package
+
 I also just found that unity seems to be working on a runtime editor, though it currently still seems buggy and doesnt feel that great.
 https://github.com/Unity-Technologies/giles
 _________
