@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Events;
 using System.Collections.Generic;
 using System.Collections;
 using CommandUndoRedo;
@@ -126,7 +127,10 @@ namespace RuntimeGizmos
 		Coroutine forceUpdatePivotCoroutine;
 
 		static Material lineMaterial;
-		static Material outlineMaterial;
+		public Material outlineMaterial;
+		
+		public UnityEvent onSelect;
+        	public UnityEvent onDeselect;
 
 		void Awake()
 		{
@@ -675,6 +679,8 @@ namespace RuntimeGizmos
 				AddTargetHighlightedRenderers(target);
 
 				SetPivotPoint();
+							
+                		onSelect.Invoke();
 			}
 		}
 
@@ -690,6 +696,8 @@ namespace RuntimeGizmos
 				RemoveTargetRoot(target);
 
 				SetPivotPoint();
+				
+				onDeselect.Invoke();
 			}
 		}
 
