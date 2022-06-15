@@ -39,7 +39,7 @@ ENDCG
 		Tags { "DisableBatching" = "True" }
 		Pass {
 			Name "OUTLINE"
-			Tags {"LightMode" = "Always" }
+			Tags {"LightMode" = "UniversalForward" }
 			Cull Front
 			ZWrite On
 			ColorMask RGB
